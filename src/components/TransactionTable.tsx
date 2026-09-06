@@ -88,11 +88,21 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
     return transactions.filter((tx) => {
       if (tx.excluded) return false;
 
-      // Search term
+      // Search term — matches description, date, category, or the amount.
+      // For amounts, digits/decimal point are compared after stripping any
+      // currency symbol, spaces or grouping commas the user typed.
+      const term = searchTerm.toLowerCase();
+      const numericTerm = term.replace(/[^0-9.]/g, '');
+      const matchesAmount =
+        /[0-9]/.test(numericTerm) &&
+        [tx.debit, tx.credit, Math.abs(tx.amount)].some(
+          (n) => n > 0 && (String(n).includes(numericTerm) || n.toFixed(2).includes(numericTerm))
+        );
       const matchesSearch =
-        tx.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        tx.date.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        tx.category.toLowerCase().includes(searchTerm.toLowerCase());
+        tx.description.toLowerCase().includes(term) ||
+        tx.date.toLowerCase().includes(term) ||
+        tx.category.toLowerCase().includes(term) ||
+        matchesAmount;
 
       // Category filter
       const matchesCategory =
@@ -270,7 +280,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Search description, date, category..."
+            placeholder="Search description, date, category, amount..."
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value);
