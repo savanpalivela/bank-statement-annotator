@@ -13,6 +13,8 @@ export interface Transaction {
   statementBalance?: number;
   /** Internal transfer (e.g. to an OD / overdraft account) — kept in the balance but excluded from income/expense totals and category charts */
   excluded?: boolean;
+  /** Free-text note / comment the user attached to this transaction (stored in IndexedDB, mirrored here) */
+  note?: string;
   rawRow: Record<string, any>;
   /** Which account/file this transaction belongs to */
   accountId: string;

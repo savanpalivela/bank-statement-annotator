@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import type { Account, Transaction } from '../types';
 import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Ban, ChevronDown, RotateCcw, Pencil, Check, X } from 'lucide-react';
+import { TransactionNoteButton } from './TransactionNoteButton';
 
 interface TransactionTableProps {
   transactions: Transaction[];
@@ -12,6 +13,8 @@ interface TransactionTableProps {
   onRenameAccount: (accountId: string, newLabel: string) => void;
   /** Toggle a transaction's "internal transfer" exclusion flag */
   onToggleExclude: (id: string) => void;
+  /** Persist a free-text note for a transaction ('' clears it) */
+  onUpdateNote: (id: string, note: string) => void;
   /** Show the per-row Account column (true when more than one account is loaded) */
   multiAccount: boolean;
 }
@@ -24,6 +27,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
   onBulkUpdateCategory,
   onRenameAccount,
   onToggleExclude,
+  onUpdateNote,
   multiAccount,
 }) => {
   const [renamingAccountId, setRenamingAccountId] = useState<string | null>(null);
@@ -357,7 +361,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
               <th className="py-3 px-3 text-right w-36">Amount</th>
               {hasRunningBalance && <th className="py-3 px-3 text-right text-blue-300 w-32">Balance</th>}
               <th className="py-3 px-3 min-w-[200px] w-64">Category / Annotation</th>
-              <th className="py-3 px-3 w-12 text-center" title="Exclude as internal transfer">&nbsp;</th>
+              <th className="py-3 px-3 w-16 text-center" title="Note &amp; exclude">&nbsp;</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50 text-slate-300">
@@ -513,15 +517,21 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                       )}
                     </td>
 
-                    {/* Exclude as internal transfer */}
-                    <td className="py-3 px-3 text-center">
-                      <button
-                        onClick={() => onToggleExclude(tx.id)}
-                        title="Exclude as internal transfer (e.g. transfer to OD account) — keeps it in the balance but out of expense totals"
-                        className="text-slate-500 hover:text-amber-400 transition-colors p-1"
-                      >
-                        <Ban className="w-3.5 h-3.5" />
-                      </button>
+                    {/* Note + exclude-as-internal-transfer */}
+                    <td className="py-3 px-3">
+                      <div className="flex items-center justify-center gap-0.5">
+                        <TransactionNoteButton
+                          note={tx.note || ''}
+                          onSave={(text) => onUpdateNote(tx.id, text)}
+                        />
+                        <button
+                          onClick={() => onToggleExclude(tx.id)}
+                          title="Exclude as internal transfer (e.g. transfer to OD account) — keeps it in the balance but out of expense totals"
+                          className="text-slate-500 hover:text-amber-400 transition-colors p-1"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -564,15 +574,21 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                       <td className="py-2 px-3 text-slate-500 whitespace-nowrap max-w-[140px] truncate" title={tx.accountLabel}>
                         {tx.accountLabel}
                       </td>
-                      <td className="py-2 px-3 text-right w-24">
-                        <button
-                          onClick={() => onToggleExclude(tx.id)}
-                          className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
-                          title="Include this transaction back in the totals"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          Include
-                        </button>
+                      <td className="py-2 px-3 text-right w-32">
+                        <div className="flex items-center justify-end gap-1">
+                          <TransactionNoteButton
+                            note={tx.note || ''}
+                            onSave={(text) => onUpdateNote(tx.id, text)}
+                          />
+                          <button
+                            onClick={() => onToggleExclude(tx.id)}
+                            className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                            title="Include this transaction back in the totals"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            Include
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
