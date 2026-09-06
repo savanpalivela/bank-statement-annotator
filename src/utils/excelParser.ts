@@ -149,9 +149,16 @@ export function detectColumnMapping(columns: string[]): ColumnMapping {
   if (descIdx !== -1) mapping.descCol = columns[descIdx];
   else mapping.descCol = columns[1] || columns[0] || '';
 
-  // Debit / Credit vs Single Amount
-  const debitIdx = lowerCols.findIndex((c) => c.includes('debit') || c.includes('dr') || c.includes('withdrawal') || c.includes('out'));
-  const creditIdx = lowerCols.findIndex((c) => c.includes('credit') || c.includes('cr') || c.includes('deposit') || c.includes('in'));
+  // Debit / Credit vs Single Amount.
+  // Long keywords are matched as substrings; the short abbreviations (dr/cr/in/out)
+  // are matched only as whole words so headers like "Description" (contains "cr")
+  // are not mistaken for the credit column.
+  const debitIdx = lowerCols.findIndex(
+    (c) => c.includes('debit') || c.includes('withdrawal') || /\b(dr|out)\b/.test(c)
+  );
+  const creditIdx = lowerCols.findIndex(
+    (c) => c.includes('credit') || c.includes('deposit') || /\b(cr|in)\b/.test(c)
+  );
 
   if (debitIdx !== -1 && creditIdx !== -1) {
     mapping.amountMode = 'split';
@@ -199,6 +206,7 @@ export function exportTransactionsToExcel(
       ...tx.rawRow,
     };
     rowObj[categoryColName] = tx.category || 'Uncategorized';
+    rowObj['Excluded (Internal Transfer)'] = tx.excluded ? 'TRUE' : '';
     return rowObj;
   });
 

@@ -1,37 +1,43 @@
 import React, { useState } from 'react';
 import type { SummaryData } from '../types';
-import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, ArrowRightLeft, BarChart3 } from 'lucide-react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, ArrowRightLeft, BarChart3, Ban, Table2 } from 'lucide-react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
+import { formatCurrency, formatShort } from '../utils/format';
+import { CategoryBreakdownModal } from './CategoryBreakdownModal';
 
 interface AnalyticsDashboardProps {
   summary: SummaryData;
 }
 
-const EXPENSE_COLORS = [
-  '#f43f5e', // Rose
-  '#fb923c', // Orange
-  '#f59e0b', // Amber
-  '#eab308', // Yellow
-  '#a855f7', // Purple
-  '#ec4899', // Pink
-  '#6366f1', // Indigo
-  '#64748b', // Slate
-];
+// Categorical palette for donut slice identity (validated for the dark surface,
+// fixed order — never cycled). A 9th+ category folds into "Other".
+const SLICE_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
+const OTHER_COLOR = '#64748b';
 
-const INCOME_COLORS = [
-  '#10b981', // Emerald
-  '#06b6d4', // Cyan
-  '#3b82f6', // Blue
-  '#8b5cf6', // Violet
-  '#14b8a6', // Teal
-  '#84cc16', // Lime
-];
+// Single-hue sequential ramps for the ranked bar chart, darkest = largest value.
+const INCOME_BAR_RAMP = ['#065f46', '#059669', '#10b981', '#34d399', '#6ee7b7'];
+const EXPENSE_BAR_RAMP = ['#9f1239', '#f43f5e', '#fb7185', '#fda4af', '#ffe4e6'];
+
+const MAX_SLICES = 8;
+
+/** Collapse everything past `max` categories into a single "Other" row. */
+function bucketTop(rows: { name: string; value: number }[], max: number) {
+  if (rows.length <= max) return rows;
+  const head = rows.slice(0, max - 1);
+  const rest = rows.slice(max - 1);
+  const otherValue = rest.reduce((s, r) => s + r.value, 0);
+  return [...head, { name: `Other (${rest.length})`, value: Math.round(otherValue * 100) / 100 }];
+}
+
+const sliceColor = (name: string, index: number) =>
+  name.startsWith('Other') ? OTHER_COLOR : SLICE_COLORS[index % SLICE_COLORS.length];
 
 export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary }) => {
   const [activeTab, setActiveTab] = useState<'expense' | 'income'>('expense');
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
 
   const expenseChartData = Object.entries(summary.expenseCategoryTotals || {})
-    .filter(([_, val]) => val > 0)
+    .filter(([, val]) => val > 0)
     .map(([name, value]) => ({
       name,
       value: parseFloat(value.toFixed(2)),
@@ -39,7 +45,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
     .sort((a, b) => b.value - a.value);
 
   const incomeChartData = Object.entries(summary.incomeCategoryTotals || {})
-    .filter(([_, val]) => val > 0)
+    .filter(([, val]) => val > 0)
     .map(([name, value]) => ({
       name,
       value: parseFloat(value.toFixed(2)),
@@ -47,19 +53,19 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
     .sort((a, b) => b.value - a.value);
 
   const currentChartData = activeTab === 'expense' ? expenseChartData : incomeChartData;
-  const currentColors = activeTab === 'expense' ? EXPENSE_COLORS : INCOME_COLORS;
-  const barFillColor = activeTab === 'expense' ? '#f43f5e' : '#10b981';
+  const barRamp = activeTab === 'expense' ? EXPENSE_BAR_RAMP : INCOME_BAR_RAMP;
 
-  const formatCurrency = (val: number) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 2,
-    }).format(val);
-  };
+  const pieData = bucketTop(currentChartData, MAX_SLICES);
+  const pieTotal = pieData.reduce((s, d) => s + d.value, 0);
+  const barData = currentChartData.slice(0, 6);
 
   return (
     <div className="space-y-5 mb-6">
+      <CategoryBreakdownModal
+        isOpen={breakdownOpen}
+        onClose={() => setBreakdownOpen(false)}
+        summary={summary}
+      />
       {/* 4 Metric Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Opening Balance */}
@@ -72,7 +78,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
             {formatCurrency(summary.openingBalance)}
           </h3>
           <div className="mt-2 text-[11px] text-slate-400">
-            Initial balance before 1st transaction
+            Sum of each statement's starting balance
           </div>
         </div>
 
@@ -131,7 +137,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
           </h3>
           <div className="mt-2 text-[11px] text-slate-400 flex items-center justify-between">
             <span>
-              Net Diff: <strong className={summary.netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(summary.netBalance)}</strong>
+              Net{summary.transferCount > 0 ? ' (excl. transfers)' : ''}:{' '}
+              <strong className={summary.netBalance >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatCurrency(summary.netBalance)}</strong>
             </span>
             <span className="text-[10px] text-indigo-400 font-medium">
               {summary.annotatedCount}/{summary.transactionCount} tagged
@@ -140,12 +147,35 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
         </div>
       </div>
 
+      {/* Internal transfers excluded from spending */}
+      {summary.transferCount > 0 && (
+        <div className="flex items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-950/20 px-4 py-3 text-xs">
+          <div className="p-2 bg-amber-500/10 text-amber-400 rounded-xl shrink-0">
+            <Ban className="w-4 h-4" />
+          </div>
+          <div className="flex-1">
+            <span className="font-semibold text-amber-200">Internal transfers excluded</span>
+            <span className="text-slate-400">
+              {' '}&mdash; {formatCurrency(summary.transferTotal)} across {summary.transferCount}{' '}
+              transaction{summary.transferCount === 1 ? '' : 's'} kept out of Total Expenses, Net and the category charts.
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Visual Charts Container with Expense / Income Toggle Tabs */}
       <div className="bg-slate-800/60 border border-slate-700/80 rounded-2xl p-5 shadow-lg space-y-5">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-700/60">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-indigo-400" />
             <h3 className="text-base font-bold text-slate-100 m-0">Category Breakdown Charts</h3>
+            <button
+              onClick={() => setBreakdownOpen(true)}
+              title="View category totals as a table"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-300 hover:bg-slate-700/50 border border-slate-700 transition-colors"
+            >
+              <Table2 className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Toggle Switch */}
@@ -181,7 +211,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Pie Chart */}
+            {/* Donut Chart */}
             <div className="bg-slate-900/80 border border-slate-700/70 rounded-2xl p-4">
               <div className="flex items-center gap-2 mb-3">
                 <PieChartIcon className={`w-4 h-4 ${activeTab === 'expense' ? 'text-rose-400' : 'text-emerald-400'}`} />
@@ -189,20 +219,38 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
                   {activeTab === 'expense' ? 'Expense' : 'Income'} Share by Category
                 </h4>
               </div>
-              <div className="h-64 w-full">
+              <div className="h-52 w-full relative">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={currentChartData}
+                      data={pieData}
                       cx="50%"
                       cy="50%"
-                      innerRadius={55}
-                      outerRadius={85}
-                      paddingAngle={3}
+                      innerRadius={58}
+                      outerRadius={86}
+                      paddingAngle={2}
                       dataKey="value"
+                      stroke="#0f172a"
+                      strokeWidth={2}
+                      labelLine={false}
+                      label={(p: any) =>
+                        p.percent >= 0.1 ? (
+                          <text
+                            x={p.x}
+                            y={p.y}
+                            fill="#ffffff"
+                            fontSize={10}
+                            fontWeight={700}
+                            textAnchor={p.x > p.cx ? 'start' : 'end'}
+                            dominantBaseline="central"
+                          >
+                            {Math.round(p.percent * 100)}%
+                          </text>
+                        ) : null
+                      }
                     >
-                      {currentChartData.map((_, index) => (
-                        <Cell key={`cell-${index}`} fill={currentColors[index % currentColors.length]} />
+                      {pieData.map((d, index) => (
+                        <Cell key={`cell-${index}`} fill={sliceColor(d.name, index)} />
                       ))}
                     </Pie>
                     <Tooltip
@@ -217,7 +265,32 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
                     />
                   </PieChart>
                 </ResponsiveContainer>
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                  <span className="text-[9px] text-slate-500 uppercase tracking-wider">Total</span>
+                  <span className="text-sm font-bold text-slate-100 font-mono">{formatShort(pieTotal)}</span>
+                </div>
               </div>
+
+              {/* Always-visible value legend */}
+              <ul className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 list-none p-0 m-0">
+                {pieData.map((d, i) => (
+                  <li key={d.name} className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span
+                        className="w-2.5 h-2.5 rounded-sm shrink-0"
+                        style={{ backgroundColor: sliceColor(d.name, i) }}
+                      />
+                      <span className="truncate text-slate-300">{d.name}</span>
+                    </span>
+                    <span className="font-mono text-slate-400 shrink-0 tabular-nums">
+                      {formatShort(d.value)}
+                      <span className="text-slate-600">
+                        {' '}· {pieTotal ? Math.round((d.value / pieTotal) * 100) : 0}%
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
 
             {/* Bar Chart */}
@@ -230,7 +303,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
               </div>
               <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={currentChartData.slice(0, 6)} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+                  <BarChart data={barData} margin={{ top: 18, right: 10, left: -12, bottom: 20 }} barCategoryGap="22%">
                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
                     <XAxis
                       dataKey="name"
@@ -241,8 +314,15 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
                       angle={-20}
                       textAnchor="end"
                     />
-                    <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} />
+                    <YAxis
+                      stroke="#94a3b8"
+                      fontSize={10}
+                      tickLine={false}
+                      width={48}
+                      tickFormatter={(v: number) => formatShort(v)}
+                    />
                     <Tooltip
+                      cursor={{ fill: '#33415533' }}
                       formatter={(val: any) => formatCurrency(Number(val))}
                       contentStyle={{
                         backgroundColor: '#0f172a',
@@ -252,7 +332,18 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
                         fontSize: '12px',
                       }}
                     />
-                    <Bar dataKey="value" fill={barFillColor} radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                      {barData.map((d, i) => (
+                        <Cell key={d.name} fill={barRamp[Math.min(i, barRamp.length - 1)]} />
+                      ))}
+                      <LabelList
+                        dataKey="value"
+                        position="top"
+                        formatter={(v: any) => formatShort(Number(v))}
+                        fill="#94a3b8"
+                        fontSize={9}
+                      />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>

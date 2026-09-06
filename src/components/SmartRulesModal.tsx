@@ -1,18 +1,24 @@
 import React, { useEffect } from 'react';
 import { X, Zap } from 'lucide-react';
 import { RuleEngineSidebar } from './RuleEngineSidebar';
-import type { Rule } from '../types';
+import type { Account, Rule, Transaction } from '../types';
 
 interface SmartRulesModalProps {
   isOpen: boolean;
   onClose: () => void;
   rules: Rule[];
   categories: string[];
+  accounts: Account[];
+  transactions: Transaction[];
   onAddRule: (rule: Rule) => void;
   onUpdateRule: (rule: Rule) => void;
   onDeleteRule: (id: string) => void;
+  onDuplicateRule: (id: string) => void;
   onToggleRule: (id: string) => void;
   onRunRules: (overrideExisting: boolean) => void;
+  onRunSingleRule: (id: string, overrideExisting: boolean) => void;
+  onExportRules: () => void;
+  onImportRules: (text: string) => void;
 }
 
 export const SmartRulesModal: React.FC<SmartRulesModalProps> = ({
@@ -20,11 +26,17 @@ export const SmartRulesModal: React.FC<SmartRulesModalProps> = ({
   onClose,
   rules,
   categories,
+  accounts,
+  transactions,
   onAddRule,
   onUpdateRule,
   onDeleteRule,
+  onDuplicateRule,
   onToggleRule,
   onRunRules,
+  onRunSingleRule,
+  onExportRules,
+  onImportRules,
 }) => {
   // Close on Escape key
   useEffect(() => {
@@ -78,14 +90,20 @@ export const SmartRulesModal: React.FC<SmartRulesModalProps> = ({
           <RuleEngineSidebar
             rules={rules}
             categories={categories}
+            accounts={accounts}
+            transactions={transactions}
             onAddRule={onAddRule}
             onUpdateRule={onUpdateRule}
             onDeleteRule={onDeleteRule}
+            onDuplicateRule={onDuplicateRule}
+            onExportRules={onExportRules}
+            onImportRules={onImportRules}
             onToggleRule={onToggleRule}
             onRunRules={(override) => {
               onRunRules(override);
               onClose();
             }}
+            onRunSingleRule={onRunSingleRule}
           />
         </div>
       </div>

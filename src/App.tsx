@@ -14,11 +14,18 @@ import {
   DEFAULT_SAMPLE_MAPPING,
   parseRawDataToTransactions,
   computeMergedRunningBalance,
+  computeAggregateOpeningBalance,
+  dedupeAcrossAccounts,
 } from './utils/sampleData';
-import { parseMultipleExcelFiles, parseExcelFileAsNewAccount, exportTransactionsToExcel } from './utils/excelParser';
+import { parseExcelFileAsNewAccount, exportTransactionsToExcel } from './utils/excelParser';
 import type { MultiFileParseResult } from './utils/excelParser';
-import { INITIAL_RULES, applyRulesToTransactions } from './utils/ruleEngine';
-import { CheckCircle, AlertCircle, Files, AlertTriangle, RotateCcw, PlusCircle, X, Landmark } from 'lucide-react';
+import { INITIAL_RULES, applyRulesToTransactions, normalizeRules } from './utils/ruleEngine';
+import { exportRulesToFile, parseImportedRules } from './utils/rulesIO';
+import { exportCategoriesToFile, parseImportedCategories } from './utils/categoriesIO';
+import { SessionsModal } from './components/SessionsModal';
+import { getSession, upsertSession, deleteSession, renameSession } from './utils/sessionStore';
+import type { SavedSession, SessionData } from './utils/sessionStore';
+import { CheckCircle, AlertCircle, Files, AlertTriangle, RotateCcw, PlusCircle, X, Landmark, Layers } from 'lucide-react';
 
 const LOCAL_STORAGE_RULES_KEY = 'bank_annotator_smart_rules_v1';
 const LOCAL_STORAGE_SESSION_KEY = 'bank_annotator_session_state_v2'; // bumped version for new schema
@@ -28,6 +35,17 @@ const LOCAL_STORAGE_CATEGORIES_KEY = 'bank_annotator_categories_v2';
 function fileNameToLabel(fileName: string, index: number): string {
   const base = fileName.replace(/\.(xlsx|xls)$/i, '');
   return base.length > 24 ? `Account ${index + 1}` : base;
+}
+
+/** Rebuild the per-account raw-row map from persisted transactions (each carries its rawRow). */
+function reconstructRawDataMap(txs: Transaction[]): Map<string, Record<string, any>[]> {
+  const map = new Map<string, Record<string, any>[]>();
+  for (const tx of txs) {
+    if (!tx.rawRow) continue;
+    if (!map.has(tx.accountId)) map.set(tx.accountId, []);
+    map.get(tx.accountId)!.push(tx.rawRow);
+  }
+  return map;
 }
 
 export function App() {
@@ -45,12 +63,17 @@ export function App() {
   const [isRulesModalOpen, setIsRulesModalOpen] = useState(false);
   const [isMappingModalOpen, setIsMappingModalOpen] = useState<string | null>(null); // accountId
   const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
+  const [isSessionsOpen, setIsSessionsOpen] = useState(false);
+
+  // ── Named session tracking ────────────────────────────────────────────────
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentSessionName, setCurrentSessionName] = useState<string | null>(null);
 
   // ── Rules ─────────────────────────────────────────────────────────────────
   const [rules, setRules] = useState<Rule[]>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_RULES_KEY);
-      if (saved) return JSON.parse(saved);
+      if (saved) return normalizeRules(JSON.parse(saved));
     } catch {}
     return INITIAL_RULES;
   });
@@ -97,12 +120,16 @@ export function App() {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_SESSION_KEY);
       if (saved) {
-        const { accounts: savedAccounts, transactions: savedTxs, isUsingSample: savedSample, rejectedFilesList: savedRejected } = JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        const { accounts: savedAccounts, transactions: savedTxs, isUsingSample: savedSample, rejectedFilesList: savedRejected } = parsed;
         if (savedTxs && savedTxs.length > 0) {
           setAccounts(savedAccounts || []);
           setTransactions(savedTxs);
           setIsUsingSample(!!savedSample);
           setRejectedFilesList(savedRejected || []);
+          reconstructRawDataMap(savedTxs).forEach((rows, accId) => rawDataMapRef.current.set(accId, rows));
+          if (parsed.currentSessionId) setCurrentSessionId(parsed.currentSessionId);
+          if (parsed.currentSessionName) setCurrentSessionName(parsed.currentSessionName);
         }
       }
     } catch (e) {
@@ -119,13 +146,15 @@ export function App() {
           transactions,
           isUsingSample,
           rejectedFilesList,
+          currentSessionId,
+          currentSessionName,
           timestamp: Date.now(),
         }));
       } else {
         localStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
       }
     } catch {}
-  }, [accounts, transactions, isUsingSample, rejectedFilesList]);
+  }, [accounts, transactions, isUsingSample, rejectedFilesList, currentSessionId, currentSessionName]);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const triggerNotification = (message: string, type: 'success' | 'info' = 'success') => {
@@ -135,13 +164,16 @@ export function App() {
 
   /**
    * Re-parse all accounts and merge into a single sorted+running-balance list.
-   * Preserves existing category annotations on matching transaction IDs.
+   * Preserves existing category annotations and the excluded flag on matching transaction IDs.
+   * Transactions that appear in more than one statement (overlapping periods) are
+   * de-duplicated so they are counted once in the table and the balance.
    */
   const rebuildTransactions = (
     updatedAccounts: Account[],
     rawDataMap: Map<string, Record<string, any>[]>,
-    categoryOverrides?: Map<string, string>
-  ): Transaction[] => {
+    categoryOverrides?: Map<string, string>,
+    excludedOverrides?: Set<string>
+  ): { transactions: Transaction[]; duplicatesRemoved: number; duplicateAccountIds: Set<string> } => {
     const all: Transaction[] = [];
     updatedAccounts.forEach((acc) => {
       const rows = rawDataMap.get(acc.id) || [];
@@ -150,11 +182,24 @@ export function App() {
         if (categoryOverrides && categoryOverrides.has(tx.id)) {
           tx.category = categoryOverrides.get(tx.id)!;
         }
+        if (excludedOverrides && excludedOverrides.has(tx.id)) {
+          tx.excluded = true;
+        }
         all.push(tx);
       });
     });
-    return computeMergedRunningBalance(all);
+    const { transactions: unique, duplicatesRemoved, duplicateAccounts, accountMerges } =
+      dedupeAcrossAccounts(all);
+    const opening = computeAggregateOpeningBalance(unique, accountMerges);
+    return {
+      transactions: computeMergedRunningBalance(unique, opening),
+      duplicatesRemoved,
+      duplicateAccountIds: duplicateAccounts,
+    };
   };
+
+  const dupNote = (n: number) =>
+    n > 0 ? ` Merged ${n} duplicate transaction${n === 1 ? '' : 's'} found in more than one statement.` : '';
 
   // Raw data keyed by accountId (not in state to avoid bloat; rebuilt on each load)
   const rawDataMapRef = useRef<Map<string, Record<string, any>[]>>(new Map());
@@ -181,6 +226,38 @@ export function App() {
     triggerNotification(`Deleted ${type} category "${catToDelete}"`, 'info');
   };
 
+  const handleExportCategories = () => {
+    exportCategoriesToFile(categories);
+    triggerNotification('Exported categories.');
+  };
+  const handleImportCategories = (text: string) => {
+    let parsed;
+    try {
+      parsed = parseImportedCategories(text);
+    } catch (e: any) {
+      triggerNotification(`Import failed: ${e.message}`, 'info');
+      return;
+    }
+    const total = parsed.income.length + parsed.expense.length;
+    const replace = window.confirm(
+      `Import ${total} categor${total === 1 ? 'y' : 'ies'}.\n\n` +
+        `OK  →  replace your current expense & income lists\n` +
+        `Cancel  →  add the new ones, keep existing`
+    );
+    setCategories((prev) => {
+      if (replace) return parsed;
+      const merge = (base: string[], add: string[]) => {
+        const seen = new Set(base.map((c) => c.toLowerCase()));
+        return [...base, ...add.filter((c) => !seen.has(c.toLowerCase()))];
+      };
+      return {
+        income: merge(prev.income, parsed.income),
+        expense: merge(prev.expense, parsed.expense),
+      };
+    });
+    triggerNotification(`Imported categories — ${replace ? 'replaced existing' : 'merged'}.`);
+  };
+
   // ── Session Reset ─────────────────────────────────────────────────────────
   const handleClearSession = () => {
     setAccounts([]);
@@ -188,8 +265,78 @@ export function App() {
     setTransactions([]);
     setRejectedFilesList([]);
     setIsUsingSample(false);
+    setCurrentSessionId(null);
+    setCurrentSessionName(null);
     localStorage.removeItem(LOCAL_STORAGE_SESSION_KEY);
     triggerNotification('Session cleared successfully!', 'info');
+  };
+
+  // ── Named Sessions ────────────────────────────────────────────────────────
+  const suggestedSessionName =
+    accounts.length === 0
+      ? 'My session'
+      : `${accounts.length === 1 ? accounts[0].label : `${accounts.length} accounts`} — ${new Date().toLocaleDateString()}`;
+
+  const handleSaveSession = (name: string, mode: 'update' | 'new') => {
+    const id = mode === 'update' && currentSessionId ? currentSessionId : `sess-${Date.now()}`;
+    const data: SessionData = { accounts, transactions, isUsingSample, rejectedFilesList };
+    const session: SavedSession = {
+      id,
+      name,
+      savedAt: Date.now(),
+      accountCount: accounts.length,
+      txCount: transactions.length,
+      annotatedCount: summaryData.annotatedCount,
+      data,
+    };
+    try {
+      upsertSession(session);
+      setCurrentSessionId(id);
+      setCurrentSessionName(name);
+      triggerNotification(mode === 'update' ? `Session "${name}" updated.` : `Session "${name}" saved.`);
+    } catch {
+      triggerNotification('Could not save — browser storage is full. Delete an old session and retry.', 'info');
+    }
+  };
+
+  const handleLoadSession = (id: string) => {
+    const session = getSession(id);
+    if (!session) {
+      triggerNotification('That session could not be found.', 'info');
+      return;
+    }
+    if (
+      transactions.length > 0 &&
+      id !== currentSessionId &&
+      !window.confirm(`Load "${session.name}"? This replaces the statements currently open.`)
+    ) {
+      return;
+    }
+    const { accounts: a, transactions: t, isUsingSample: s, rejectedFilesList: r } = session.data;
+    rawDataMapRef.current.clear();
+    reconstructRawDataMap(t).forEach((rows, accId) => rawDataMapRef.current.set(accId, rows));
+    setAccounts(a || []);
+    setTransactions(t || []);
+    setIsUsingSample(!!s);
+    setRejectedFilesList(r || []);
+    setCurrentSessionId(session.id);
+    setCurrentSessionName(session.name);
+    setIsSessionsOpen(false);
+    triggerNotification(`Loaded session "${session.name}" (${t.length} transactions).`);
+  };
+
+  const handleDeleteSession = (id: string) => {
+    deleteSession(id);
+    if (id === currentSessionId) {
+      setCurrentSessionId(null);
+      setCurrentSessionName(null);
+    }
+    triggerNotification('Session deleted.', 'info');
+  };
+
+  const handleRenameSession = (id: string, name: string) => {
+    renameSession(id, name);
+    if (id === currentSessionId) setCurrentSessionName(name);
   };
 
   // ── Demo Sample ───────────────────────────────────────────────────────────
@@ -210,6 +357,8 @@ export function App() {
     setAccounts([newAccount]);
     setIsUsingSample(true);
     setRejectedFilesList([]);
+    setCurrentSessionId(null);
+    setCurrentSessionName(null);
 
     const parsed = parseRawDataToTransactions(SAMPLE_RAW_DATA, DEFAULT_SAMPLE_MAPPING, accountId, accountLabel);
     const merged = computeMergedRunningBalance(parsed);
@@ -219,46 +368,58 @@ export function App() {
     triggerNotification(`Loaded demo sample (${merged.length} transactions). Auto-categorised ${matchesCount}.`);
   };
 
-  // ── Initial file upload (first account or same-format batch) ──────────────
+  // ── Initial file upload — each file becomes its own account statement ─────
   const handleMultiFilesParsed = (result: MultiFileParseResult) => {
     if (!result.acceptedResults || result.acceptedResults.length === 0) {
       if (result.rejectedFiles.length > 0) setRejectedFilesList(result.rejectedFiles);
       return;
     }
 
-    // All accepted files share the same format → treated as the same account (batched)
-    const firstResult = result.acceptedResults[0];
-    const accountId = `acc-${Date.now()}`;
-    const accountLabel = result.acceptedResults.length === 1
-      ? fileNameToLabel(firstResult.fileName, 0)
-      : `Account 1 (${result.acceptedResults.length} files)`;
-
-    const combinedRaw: Record<string, any>[] = [];
-    result.acceptedResults.forEach((r) => combinedRaw.push(...r.rawData));
+    // Every uploaded file is treated as an individual account statement, even when
+    // the column formats match. Opening balance is then the sum of each statement's
+    // own opening balance (see computeAggregateOpeningBalance).
+    const baseTs = Date.now();
     rawDataMapRef.current.clear();
-    rawDataMapRef.current.set(accountId, combinedRaw);
+    const newAccounts: Account[] = result.acceptedResults.map((r, idx) => {
+      const accountId = `acc-${baseTs}-${idx}`;
+      rawDataMapRef.current.set(accountId, r.rawData);
+      return {
+        id: accountId,
+        label: fileNameToLabel(r.fileName, idx),
+        fileName: r.fileName,
+        columns: r.columns,
+        mapping: r.suggestedMapping,
+        color: ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length],
+      };
+    });
 
-    const newAccount: Account = {
-      id: accountId,
-      label: accountLabel,
-      fileName: result.acceptedResults.length === 1 ? firstResult.fileName : `${result.acceptedResults.length} files`,
-      columns: firstResult.columns,
-      mapping: firstResult.suggestedMapping,
-      color: ACCOUNT_COLORS[0],
-    };
+    const firstPass = rebuildTransactions(newAccounts, rawDataMapRef.current);
 
-    setAccounts([newAccount]);
+    // Drop any file that is an exact re-upload of another
+    const keptAccounts = newAccounts.filter((a) => !firstPass.duplicateAccountIds.has(a.id));
+    firstPass.duplicateAccountIds.forEach((id) => rawDataMapRef.current.delete(id));
+    const skippedFiles = newAccounts.length - keptAccounts.length;
+
+    const { transactions: merged, duplicatesRemoved } =
+      skippedFiles > 0 ? rebuildTransactions(keptAccounts, rawDataMapRef.current) : firstPass;
+
+    setAccounts(keptAccounts);
     setRejectedFilesList(result.rejectedFiles);
     setIsUsingSample(false);
+    setCurrentSessionId(null);
+    setCurrentSessionName(null);
 
-    const parsed = parseRawDataToTransactions(combinedRaw, firstResult.suggestedMapping, accountId, accountLabel);
-    const merged = computeMergedRunningBalance(parsed);
     const { updatedTransactions, matchesCount } = applyRulesToTransactions(merged, rules, false);
     setTransactions(updatedTransactions);
 
-    let msg = `Loaded ${result.acceptedResults.length} file(s) as Account 1 (${merged.length} rows). Auto-categorised ${matchesCount}.`;
+    let msg = `Loaded ${result.acceptedResults.length} file(s) as ${keptAccounts.length} account(s) (${merged.length} rows). Auto-categorised ${matchesCount}.`;
     if (result.rejectedFiles.length > 0) msg += ` ${result.rejectedFiles.length} file(s) rejected.`;
-    triggerNotification(msg, result.rejectedFiles.length > 0 ? 'info' : 'success');
+    if (skippedFiles > 0) msg += ` ${skippedFiles} file(s) skipped as an exact duplicate.`;
+    msg += dupNote(duplicatesRemoved);
+    triggerNotification(
+      msg,
+      result.rejectedFiles.length > 0 || duplicatesRemoved > 0 || skippedFiles > 0 ? 'info' : 'success'
+    );
   };
 
   // ── Add New Account (different format file) ───────────────────────────────
@@ -284,13 +445,22 @@ export function App() {
       const updatedAccounts = [...accounts, newAccount];
       setAccounts(updatedAccounts);
 
-      // Preserve category overrides on existing transactions
+      // Preserve category & exclusion overrides on existing transactions
       const categoryOverrides = new Map(transactions.map((tx) => [tx.id, tx.category]));
-      const merged = rebuildTransactions(updatedAccounts, rawDataMapRef.current, categoryOverrides);
+      const excludedOverrides = new Set(transactions.filter((tx) => tx.excluded).map((tx) => tx.id));
+      const { transactions: merged, duplicatesRemoved } = rebuildTransactions(
+        updatedAccounts,
+        rawDataMapRef.current,
+        categoryOverrides,
+        excludedOverrides
+      );
       const { updatedTransactions, matchesCount } = applyRulesToTransactions(merged, rules, false);
       setTransactions(updatedTransactions);
 
-      triggerNotification(`Added new account "${accountLabel}" (${parsed.rawData.length} rows). Auto-categorised ${matchesCount}.`);
+      triggerNotification(
+        `Added new account "${accountLabel}" (${parsed.rawData.length} rows). Auto-categorised ${matchesCount}.` +
+          dupNote(duplicatesRemoved)
+      );
       setIsAddAccountOpen(false);
     } catch (err: any) {
       triggerNotification(`Failed to add account: ${err.message}`, 'info');
@@ -307,7 +477,13 @@ export function App() {
       setTransactions([]);
     } else {
       const categoryOverrides = new Map(transactions.map((tx) => [tx.id, tx.category]));
-      const merged = rebuildTransactions(updatedAccounts, rawDataMapRef.current, categoryOverrides);
+      const excludedOverrides = new Set(transactions.filter((tx) => tx.excluded).map((tx) => tx.id));
+      const { transactions: merged } = rebuildTransactions(
+        updatedAccounts,
+        rawDataMapRef.current,
+        categoryOverrides,
+        excludedOverrides
+      );
       setTransactions(merged);
     }
     triggerNotification('Account removed.', 'info');
@@ -325,7 +501,13 @@ export function App() {
     const updatedAccounts = accounts.map((a) => a.id === accountId ? { ...a, mapping: newMapping } : a);
     setAccounts(updatedAccounts);
     const categoryOverrides = new Map(transactions.map((tx) => [tx.id, tx.category]));
-    const merged = rebuildTransactions(updatedAccounts, rawDataMapRef.current, categoryOverrides);
+    const excludedOverrides = new Set(transactions.filter((tx) => tx.excluded).map((tx) => tx.id));
+    const { transactions: merged } = rebuildTransactions(
+      updatedAccounts,
+      rawDataMapRef.current,
+      categoryOverrides,
+      excludedOverrides
+    );
     setTransactions(merged);
     triggerNotification('Column mapping updated and transactions recalculated.', 'info');
   };
@@ -338,6 +520,11 @@ export function App() {
       setCategories((prev) => ({ ...prev, [targetType]: [...prev[targetType], newCategory] }));
     }
     setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, category: newCategory } : tx)));
+  };
+
+  // ── Toggle "exclude as internal transfer" ─────────────────────────────────
+  const handleToggleExclude = (id: string) => {
+    setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, excluded: !tx.excluded } : tx)));
   };
 
   // ── Rule Handlers ─────────────────────────────────────────────────────────
@@ -353,14 +540,84 @@ export function App() {
     setRules((p) => p.filter((r) => r.id !== id));
     triggerNotification('Rule removed.', 'info');
   };
+  const handleDuplicateRule = (id: string) => {
+    setRules((p) => {
+      const idx = p.findIndex((r) => r.id === id);
+      if (idx === -1) return p;
+      const orig = p[idx];
+      const copy: Rule = {
+        ...orig,
+        id: `rule-${Date.now()}`,
+        name: `${orig.name} (copy)`,
+        conditions: orig.conditions?.map((c) => ({ ...c })),
+      };
+      const next = [...p];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+    triggerNotification('Rule duplicated.');
+  };
   const handleToggleRule = (id: string) => {
     setRules((p) => p.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)));
+  };
+  const handleExportRules = () => {
+    if (rules.length === 0) {
+      triggerNotification('No rules to export.', 'info');
+      return;
+    }
+    exportRulesToFile(rules);
+    triggerNotification(`Exported ${rules.length} smart rule${rules.length === 1 ? '' : 's'}.`);
+  };
+  const handleImportRules = (text: string) => {
+    let imported;
+    try {
+      imported = parseImportedRules(text);
+    } catch (e: any) {
+      triggerNotification(`Import failed: ${e.message}`, 'info');
+      return;
+    }
+    if (imported.length === 0) {
+      triggerNotification('No rules found in that file.', 'info');
+      return;
+    }
+    // Re-point any rule scoped to an account that doesn't exist here
+    const known = new Set(accounts.map((a) => a.id));
+    let reset = 0;
+    imported = imported.map((r) => {
+      if (r.accountId && r.accountId !== 'ALL' && !known.has(r.accountId)) {
+        reset++;
+        return { ...r, accountId: 'ALL' };
+      }
+      return r;
+    });
+    const stamped = imported.map((r, i) => ({ ...r, id: `rule-${Date.now()}-${i}` }));
+    const replace = window.confirm(
+      `Import ${stamped.length} rule(s).\n\n` +
+        `OK  →  replace all ${rules.length} current rule(s)\n` +
+        `Cancel  →  add the imported rules to your current ones`
+    );
+    setRules((p) => (replace ? stamped : [...p, ...stamped]));
+    let msg = `Imported ${stamped.length} rule(s) — ${replace ? 'replaced existing' : 'merged'}.`;
+    if (reset) msg += ` ${reset} had an unknown account, set to "All accounts".`;
+    triggerNotification(msg);
   };
   const handleRunRules = (overrideExisting: boolean) => {
     if (transactions.length === 0) return;
     const { updatedTransactions, matchesCount } = applyRulesToTransactions(transactions, rules, overrideExisting);
     setTransactions(updatedTransactions);
-    triggerNotification(`Rules applied! Updated ${matchesCount} categories.`);
+    triggerNotification(`Rules applied! Updated ${matchesCount} transaction${matchesCount === 1 ? '' : 's'}.`);
+  };
+  const handleRunSingleRule = (id: string, overrideExisting: boolean) => {
+    if (transactions.length === 0) return;
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return;
+    const { updatedTransactions, matchesCount } = applyRulesToTransactions(
+      transactions,
+      [{ ...rule, enabled: true }],
+      overrideExisting
+    );
+    setTransactions(updatedTransactions);
+    triggerNotification(`Rule "${rule.name}" applied to ${matchesCount} transaction${matchesCount === 1 ? '' : 's'}.`);
   };
 
   // ── Export ────────────────────────────────────────────────────────────────
@@ -376,10 +633,26 @@ export function App() {
   // ── Summary Data ──────────────────────────────────────────────────────────
   const summaryData: SummaryData = useMemo(() => {
     let totalIncome = 0, totalExpenses = 0, annotatedCount = 0;
+    let transferTotal = 0, transferCount = 0;
+    let grossIncome = 0, grossExpenses = 0;
     const expenseCategoryTotals: Record<string, number> = {};
     const incomeCategoryTotals: Record<string, number> = {};
 
     transactions.forEach((tx) => {
+      // Gross figures always include every row so the closing balance still
+      // reconciles with the real bank statement.
+      grossIncome += tx.credit;
+      grossExpenses += tx.debit;
+
+      // Internal transfers (e.g. to an OD account) are kept out of income/expense
+      // totals and the category charts, and reported separately.
+      if (tx.excluded) {
+        transferTotal += tx.debit - tx.credit;
+        transferCount++;
+        annotatedCount++;
+        return;
+      }
+
       totalIncome += tx.credit;
       totalExpenses += tx.debit;
       if (tx.category && tx.category !== 'Uncategorized') {
@@ -392,15 +665,20 @@ export function App() {
       }
     });
 
-    // Merged running balance: first tx balance before its own effect = opening
-    const sorted = [...transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const firstTx = sorted[0];
-    const lastTx = sorted[sorted.length - 1];
-
-    const closingBalance = lastTx?.runningBalance ?? (totalIncome - totalExpenses);
-    const openingBalance = firstTx?.runningBalance !== undefined
-      ? firstTx.runningBalance - (firstTx.credit - firstTx.debit)
-      : 0;
+    // The merged running balance already bakes in the correct combined opening
+    // balance (accounting for overlapping statements), so derive opening/closing
+    // from the chronologically first / last transaction's running balance.
+    const chrono = [...transactions].sort(
+      (a, b) => (new Date(a.date).getTime() || 0) - (new Date(b.date).getTime() || 0)
+    );
+    const firstTx = chrono[0];
+    const lastTx = chrono[chrono.length - 1];
+    const openingBalance =
+      firstTx?.runningBalance !== undefined
+        ? Math.round((firstTx.runningBalance - (firstTx.credit - firstTx.debit)) * 100) / 100
+        : computeAggregateOpeningBalance(transactions);
+    const closingBalance =
+      lastTx?.runningBalance ?? Math.round((openingBalance + grossIncome - grossExpenses) * 100) / 100;
 
     return {
       totalIncome,
@@ -408,6 +686,8 @@ export function App() {
       openingBalance,
       closingBalance,
       netBalance: totalIncome - totalExpenses,
+      transferTotal: Math.round(transferTotal * 100) / 100,
+      transferCount,
       transactionCount: transactions.length,
       annotatedCount,
       expenseCategoryTotals,
@@ -454,17 +734,42 @@ export function App() {
         onAddCategory={handleAddCategory}
         onUpdateCategory={handleUpdateCategoryName}
         onDeleteCategory={handleDeleteCategory}
+        onExportCategories={handleExportCategories}
+        onImportCategories={handleImportCategories}
+      />
+
+      {/* Sessions Modal */}
+      <SessionsModal
+        isOpen={isSessionsOpen}
+        onClose={() => setIsSessionsOpen(false)}
+        hasData={transactions.length > 0}
+        currentSessionId={currentSessionId}
+        currentSessionName={currentSessionName}
+        suggestedName={suggestedSessionName}
+        onSave={handleSaveSession}
+        onLoad={handleLoadSession}
+        onDelete={handleDeleteSession}
+        onRename={handleRenameSession}
       />
 
       {/* Main Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 md:p-8 space-y-6">
         {transactions.length === 0 ? (
-          <div className="max-w-2xl mx-auto py-12">
+          <div className="max-w-2xl mx-auto py-12 space-y-4">
             <FileUploader
               onMultiFilesParsed={handleMultiFilesParsed}
               onLoadSample={handleLoadSampleData}
               existingBaseColumns={[]}
             />
+            <div className="text-center">
+              <button
+                onClick={() => setIsSessionsOpen(true)}
+                className="text-xs text-slate-400 hover:text-white inline-flex items-center gap-1.5 underline"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Open a saved session
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -476,7 +781,14 @@ export function App() {
                   Accounts ({accounts.length})
                   <span className="ml-1 text-slate-500">— {transactions.length} total transactions</span>
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setIsSessionsOpen(true)}
+                    className="text-xs bg-slate-700/60 hover:bg-slate-700 text-slate-200 border border-slate-600 px-3 py-1.5 rounded-xl font-medium flex items-center gap-1.5 transition-colors"
+                  >
+                    <Layers className="w-3.5 h-3.5" />
+                    {currentSessionName ? `Session: ${currentSessionName}` : 'Sessions'}
+                  </button>
                   <button
                     onClick={() => setIsAddAccountOpen(true)}
                     className="text-xs bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 rounded-xl font-medium flex items-center gap-1.5 transition-colors"
@@ -586,6 +898,8 @@ export function App() {
               accounts={accounts}
               onUpdateCategory={handleUpdateCategory}
               onRenameAccount={handleRenameAccount}
+              onToggleExclude={handleToggleExclude}
+              multiAccount={accounts.length > 1}
             />
           </>
         )}
@@ -597,11 +911,17 @@ export function App() {
         onClose={() => setIsRulesModalOpen(false)}
         rules={rules}
         categories={allCategories}
+        accounts={accounts}
+        transactions={transactions}
         onAddRule={handleAddRule}
         onUpdateRule={handleUpdateRule}
         onDeleteRule={handleDeleteRule}
+        onDuplicateRule={handleDuplicateRule}
         onToggleRule={handleToggleRule}
         onRunRules={handleRunRules}
+        onRunSingleRule={handleRunSingleRule}
+        onExportRules={handleExportRules}
+        onImportRules={handleImportRules}
       />
 
       {/* Column Mapping Modal — per account */}

@@ -1,18 +1,30 @@
 import React, { useState, useMemo } from 'react';
-import type { Transaction } from '../types';
-import { Search, ChevronLeft, ChevronRight, ArrowUpDown } from 'lucide-react';
+import type { Account, Transaction } from '../types';
+import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Ban, ChevronDown, RotateCcw, Pencil } from 'lucide-react';
 
 interface TransactionTableProps {
   transactions: Transaction[];
   categories: string[];
+  accounts: Account[];
   onUpdateCategory: (id: string, newCategory: string) => void;
+  onRenameAccount: (accountId: string, newLabel: string) => void;
+  /** Toggle a transaction's "internal transfer" exclusion flag */
+  onToggleExclude: (id: string) => void;
+  /** Show the per-row Account column (true when more than one account is loaded) */
+  multiAccount: boolean;
 }
 
 export const TransactionTable: React.FC<TransactionTableProps> = ({
   transactions,
   categories,
+  accounts,
   onUpdateCategory,
+  onRenameAccount,
+  onToggleExclude,
+  multiAccount,
 }) => {
+  const [renamingAccountId, setRenamingAccountId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'income' | 'expense'>('ALL');
@@ -21,14 +33,17 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [customTextMap, setCustomTextMap] = useState<Record<string, string>>({});
   const [sortAsc, setSortAsc] = useState<boolean>(true);
+  const [showExcluded, setShowExcluded] = useState(false);
 
   const hasRunningBalance = useMemo(() => {
     return transactions.some((t) => t.runningBalance !== undefined);
   }, [transactions]);
 
-  // Filtering & Sorting
+  // Filtering & Sorting — excluded internal transfers are pulled out into their own section
   const filteredTransactions = useMemo(() => {
     return transactions.filter((tx) => {
+      if (tx.excluded) return false;
+
       // Search term
       const matchesSearch =
         tx.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -49,6 +64,18 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
       return matchesSearch && matchesCategory && matchesType;
     });
   }, [transactions, searchTerm, categoryFilter, typeFilter]);
+
+  const excludedTransactions = useMemo(
+    () =>
+      transactions
+        .filter((tx) => tx.excluded)
+        .sort((a, b) => (new Date(a.date).getTime() || 0) - (new Date(b.date).getTime() || 0)),
+    [transactions]
+  );
+  const excludedTotal = useMemo(
+    () => excludedTransactions.reduce((sum, tx) => sum + (tx.debit - tx.credit), 0),
+    [excludedTransactions]
+  );
 
   const sortedTransactions = useMemo(() => {
     return [...filteredTransactions].sort((a, b) => {
@@ -91,8 +118,50 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
     }).format(Math.abs(amount));
   };
 
+  const commitRename = (id: string) => {
+    const v = renameValue.trim();
+    if (v) onRenameAccount(id, v);
+    setRenamingAccountId(null);
+  };
+
   return (
     <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl shadow-lg flex flex-col overflow-hidden w-full">
+      {/* Account rename strip (only with more than one account) */}
+      {multiAccount && accounts.length > 0 && (
+        <div className="px-4 pt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+          <span className="uppercase tracking-wider font-semibold">Accounts:</span>
+          {accounts.map((acc) =>
+            renamingAccountId === acc.id ? (
+              <input
+                key={acc.id}
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={() => commitRename(acc.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitRename(acc.id);
+                  if (e.key === 'Escape') setRenamingAccountId(null);
+                }}
+                className="bg-slate-900 border border-indigo-500 text-slate-100 rounded-md px-1.5 py-0.5 text-[11px] w-36 focus:outline-none"
+              />
+            ) : (
+              <button
+                key={acc.id}
+                onClick={() => {
+                  setRenamingAccountId(acc.id);
+                  setRenameValue(acc.label);
+                }}
+                title="Rename account"
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${acc.color} hover:opacity-80`}
+              >
+                {acc.label}
+                <Pencil className="w-2.5 h-2.5 opacity-60" />
+              </button>
+            )
+          )}
+        </div>
+      )}
+
       {/* Controls Bar */}
       <div className="p-4 border-b border-slate-700/60 bg-slate-800/40 flex flex-wrap items-center justify-between gap-3">
         {/* Search */}
@@ -177,16 +246,17 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                 </div>
               </th>
               <th className="py-3 px-3 min-w-[180px]">Description</th>
-              <th className="py-3 px-3 text-right text-rose-400 w-32">Debit (Expense)</th>
-              <th className="py-3 px-3 text-right text-emerald-400 w-32">Credit (Income)</th>
+              {multiAccount && <th className="py-3 px-3 w-32">Account</th>}
+              <th className="py-3 px-3 text-right w-36">Amount</th>
               {hasRunningBalance && <th className="py-3 px-3 text-right text-blue-300 w-32">Balance</th>}
               <th className="py-3 px-3 min-w-[200px] w-64">Category / Annotation</th>
+              <th className="py-3 px-3 w-12 text-center" title="Exclude as internal transfer">&nbsp;</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50 text-slate-300">
             {paginatedTransactions.length === 0 ? (
               <tr>
-                <td colSpan={hasRunningBalance ? 7 : 6} className="py-12 text-center text-slate-500">
+                <td colSpan={(hasRunningBalance ? 7 : 6) + (multiAccount ? 1 : 0)} className="py-12 text-center text-slate-500">
                   No matching transactions found.
                 </td>
               </tr>
@@ -216,22 +286,32 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                       {tx.description}
                     </td>
 
-                    {/* Debit Column */}
+                    {multiAccount && (
+                      <td className="py-3 px-3 text-slate-400 whitespace-nowrap max-w-[120px] truncate" title={tx.accountLabel}>
+                        {tx.accountLabel}
+                      </td>
+                    )}
+
+                    {/* Amount Column (combined debit / credit) */}
                     <td className="py-3 px-3 text-right font-mono font-semibold whitespace-nowrap">
-                      {tx.debit > 0 ? (
+                      {isExpense && !isIncome ? (
                         <span className="text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded inline-block">
                           -{formatCurrency(tx.debit)}
                         </span>
-                      ) : (
-                        <span className="text-slate-600">-</span>
-                      )}
-                    </td>
-
-                    {/* Credit Column */}
-                    <td className="py-3 px-3 text-right font-mono font-semibold whitespace-nowrap">
-                      {tx.credit > 0 ? (
+                      ) : isIncome && !isExpense ? (
                         <span className="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded inline-block">
                           +{formatCurrency(tx.credit)}
+                        </span>
+                      ) : isIncome && isExpense ? (
+                        <span
+                          className={`px-2 py-0.5 rounded inline-block ${
+                            tx.credit - tx.debit >= 0
+                              ? 'text-emerald-400 bg-emerald-500/10'
+                              : 'text-rose-400 bg-rose-500/10'
+                          }`}
+                        >
+                          {tx.credit - tx.debit >= 0 ? '+' : '-'}
+                          {formatCurrency(tx.credit - tx.debit)}
                         </span>
                       ) : (
                         <span className="text-slate-600">-</span>
@@ -313,6 +393,17 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                         </div>
                       )}
                     </td>
+
+                    {/* Exclude as internal transfer */}
+                    <td className="py-3 px-3 text-center">
+                      <button
+                        onClick={() => onToggleExclude(tx.id)}
+                        title="Exclude as internal transfer (e.g. transfer to OD account) — keeps it in the balance but out of expense totals"
+                        className="text-slate-500 hover:text-amber-400 transition-colors p-1"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
                   </tr>
                 );
               })
@@ -320,6 +411,58 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Excluded internal transfers — collapsed section */}
+      {excludedTransactions.length > 0 && (
+        <div className="border-t border-slate-700/60 bg-amber-950/10">
+          <button
+            onClick={() => setShowExcluded((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 text-xs font-semibold text-amber-300 hover:bg-amber-950/20 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <Ban className="w-3.5 h-3.5" />
+              Excluded transfers ({excludedTransactions.length})
+              <span className="font-normal text-slate-400">
+                &mdash; {formatCurrency(excludedTotal)} kept out of expense totals
+              </span>
+            </span>
+            <ChevronDown className={`w-4 h-4 transition-transform ${showExcluded ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showExcluded && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs min-w-[560px]">
+                <tbody className="divide-y divide-slate-800/80 text-slate-400">
+                  {excludedTransactions.map((tx) => (
+                    <tr key={tx.id} className="opacity-70">
+                      <td className="py-2 px-3 font-mono whitespace-nowrap w-28">{tx.date || 'N/A'}</td>
+                      <td className="py-2 px-3 break-words" title={tx.description}>
+                        {tx.description}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono whitespace-nowrap w-32 line-through">
+                        {formatCurrency(tx.debit - tx.credit)}
+                      </td>
+                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap max-w-[140px] truncate" title={tx.accountLabel}>
+                        {tx.accountLabel}
+                      </td>
+                      <td className="py-2 px-3 text-right w-24">
+                        <button
+                          onClick={() => onToggleExclude(tx.id)}
+                          className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                          title="Include this transaction back in the totals"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          Include
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Pagination Footer */}
       <div className="p-4 border-t border-slate-700/60 bg-slate-800/40 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400">
