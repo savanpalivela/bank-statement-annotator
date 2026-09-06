@@ -522,6 +522,23 @@ export function App() {
     setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, category: newCategory } : tx)));
   };
 
+  // ── Bulk Category Update ──────────────────────────────────────────────────
+  const handleBulkUpdateCategory = (ids: string[], newCategory: string) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    if (newCategory && newCategory !== 'Uncategorized' && !allCategories.includes(newCategory)) {
+      const selected = transactions.filter((t) => idSet.has(t.id));
+      const anyIncome = selected.some((t) => t.credit > 0 && t.debit === 0);
+      const anyExpense = selected.some((t) => t.debit > 0);
+      const targetType: 'income' | 'expense' = anyIncome && !anyExpense ? 'income' : 'expense';
+      setCategories((prev) => ({ ...prev, [targetType]: [...prev[targetType], newCategory] }));
+    }
+    setTransactions((prev) => prev.map((tx) => (idSet.has(tx.id) ? { ...tx, category: newCategory } : tx)));
+    triggerNotification(
+      `Set ${ids.length} transaction${ids.length === 1 ? '' : 's'} to "${newCategory || 'Uncategorized'}".`
+    );
+  };
+
   // ── Toggle "exclude as internal transfer" ─────────────────────────────────
   const handleToggleExclude = (id: string) => {
     setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, excluded: !tx.excluded } : tx)));
@@ -897,6 +914,7 @@ export function App() {
               categories={allCategories}
               accounts={accounts}
               onUpdateCategory={handleUpdateCategory}
+              onBulkUpdateCategory={handleBulkUpdateCategory}
               onRenameAccount={handleRenameAccount}
               onToggleExclude={handleToggleExclude}
               multiAccount={accounts.length > 1}

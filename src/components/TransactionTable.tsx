@@ -1,12 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import type { Account, Transaction } from '../types';
-import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Ban, ChevronDown, RotateCcw, Pencil } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Ban, ChevronDown, RotateCcw, Pencil, Check, X } from 'lucide-react';
 
 interface TransactionTableProps {
   transactions: Transaction[];
   categories: string[];
   accounts: Account[];
   onUpdateCategory: (id: string, newCategory: string) => void;
+  /** Set the same category on many transactions at once */
+  onBulkUpdateCategory: (ids: string[], newCategory: string) => void;
   onRenameAccount: (accountId: string, newLabel: string) => void;
   /** Toggle a transaction's "internal transfer" exclusion flag */
   onToggleExclude: (id: string) => void;
@@ -19,12 +21,16 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
   categories,
   accounts,
   onUpdateCategory,
+  onBulkUpdateCategory,
   onRenameAccount,
   onToggleExclude,
   multiAccount,
 }) => {
   const [renamingAccountId, setRenamingAccountId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCategory, setBulkCategory] = useState('Uncategorized');
+  const [bulkCustom, setBulkCustom] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'income' | 'expense'>('ALL');
@@ -91,6 +97,46 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
     const start = (currentPage - 1) * pageSize;
     return sortedTransactions.slice(start, start + pageSize);
   }, [sortedTransactions, currentPage, pageSize]);
+
+  // ── Row selection / bulk edit ─────────────────────────────────────────────
+  const selectedInView = useMemo(
+    () => sortedTransactions.filter((t) => selectedIds.has(t.id)),
+    [sortedTransactions, selectedIds]
+  );
+  const allInViewSelected = sortedTransactions.length > 0 && selectedInView.length === sortedTransactions.length;
+
+  const toggleRow = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (allInViewSelected) {
+        const next = new Set(prev);
+        sortedTransactions.forEach((t) => next.delete(t.id));
+        return next;
+      }
+      const next = new Set(prev);
+      sortedTransactions.forEach((t) => next.add(t.id));
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const applyBulkCategory = () => {
+    const value = bulkCategory === 'CUSTOM' ? bulkCustom.trim() || 'Uncategorized' : bulkCategory;
+    const ids = selectedInView.map((t) => t.id);
+    if (ids.length === 0) return;
+    onBulkUpdateCategory(ids, value);
+    clearSelection();
+    setBulkCustom('');
+  };
 
   const handleCategorySelect = (id: string, value: string) => {
     if (value === 'CUSTOM') {
@@ -230,11 +276,72 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
         </div>
       </div>
 
+      {/* Bulk-edit bar (visible while rows are selected) */}
+      {selectedInView.length > 0 && (
+        <div className="px-4 py-2.5 border-b border-indigo-500/30 bg-indigo-950/30 flex flex-wrap items-center gap-2.5 text-xs">
+          <span className="font-semibold text-indigo-200">
+            {selectedInView.length} selected
+          </span>
+          <span className="text-slate-500">→ set category to</span>
+          <select
+            value={bulkCategory}
+            onChange={(e) => setBulkCategory(e.target.value)}
+            className="bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+          >
+            <option value="Uncategorized">Uncategorized</option>
+            {categories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+            <option value="CUSTOM">✏️ Custom…</option>
+          </select>
+          {bulkCategory === 'CUSTOM' && (
+            <input
+              type="text"
+              autoFocus
+              placeholder="New category name…"
+              value={bulkCustom}
+              onChange={(e) => setBulkCustom(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyBulkCategory()}
+              className="bg-slate-900 border border-indigo-500 text-slate-100 rounded-lg px-2 py-1.5 w-44 focus:outline-none"
+            />
+          )}
+          <button
+            onClick={applyBulkCategory}
+            disabled={bulkCategory === 'CUSTOM' && !bulkCustom.trim()}
+            className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-1.5 rounded-lg font-semibold"
+          >
+            <Check className="w-3.5 h-3.5" />
+            Apply
+          </button>
+          <button
+            onClick={clearSelection}
+            className="inline-flex items-center gap-1 text-slate-400 hover:text-white px-2 py-1.5"
+          >
+            <X className="w-3.5 h-3.5" />
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Responsive Scrollable Container */}
       <div className="overflow-x-auto w-full flex-1">
         <table className="w-full text-left text-xs border-collapse min-w-[700px]">
           <thead>
             <tr className="bg-slate-900/90 text-slate-400 border-b border-slate-700/80 font-semibold uppercase tracking-wider">
+              <th className="py-3 px-3 w-8 text-center">
+                <input
+                  type="checkbox"
+                  aria-label="Select all rows"
+                  checked={allInViewSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = selectedInView.length > 0 && !allInViewSelected;
+                  }}
+                  onChange={toggleSelectAll}
+                  className="rounded border-slate-600 bg-slate-800 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+              </th>
               <th className="py-3 px-3 w-10 text-center">#</th>
               <th
                 onClick={() => setSortAsc(!sortAsc)}
@@ -256,7 +363,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           <tbody className="divide-y divide-slate-700/50 text-slate-300">
             {paginatedTransactions.length === 0 ? (
               <tr>
-                <td colSpan={(hasRunningBalance ? 7 : 6) + (multiAccount ? 1 : 0)} className="py-12 text-center text-slate-500">
+                <td colSpan={(hasRunningBalance ? 8 : 7) + (multiAccount ? 1 : 0)} className="py-12 text-center text-slate-500">
                   No matching transactions found.
                 </td>
               </tr>
@@ -264,6 +371,8 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
               paginatedTransactions.map((tx, idx) => {
                 const isIncome = tx.credit > 0;
                 const isExpense = tx.debit > 0;
+
+                const isSelected = selectedIds.has(tx.id);
 
                 return (
                   <tr
@@ -274,8 +383,18 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                         : isExpense
                         ? 'bg-rose-950/20'
                         : 'bg-transparent'
-                    }`}
+                    } ${isSelected ? 'shadow-[inset_3px_0_0_0_#818cf8]' : ''}`}
                   >
+                    <td className="py-3 px-3 text-center">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${tx.description}`}
+                        checked={isSelected}
+                        onChange={() => toggleRow(tx.id)}
+                        className="rounded border-slate-600 bg-slate-800 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                    </td>
+
                     <td className="py-3 px-3 text-center font-mono text-slate-500 text-[11px]">
                       {(currentPage - 1) * pageSize + idx + 1}
                     </td>
