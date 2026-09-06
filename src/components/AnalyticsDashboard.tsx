@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { SummaryData } from '../types';
-import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, ArrowRightLeft, BarChart3, Ban, Table2 } from 'lucide-react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
+import { TrendingUp, TrendingDown, Wallet, ArrowRightLeft, BarChart3, Ban, Table2, ChevronDown } from 'lucide-react';
+import { Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
 import { formatCurrency, formatShort } from '../utils/format';
 import { CategoryBreakdownModal } from './CategoryBreakdownModal';
 
@@ -9,19 +9,29 @@ interface AnalyticsDashboardProps {
   summary: SummaryData;
 }
 
-// Categorical palette for donut slice identity (validated for the dark surface,
-// fixed order — never cycled). A 9th+ category folds into "Other".
+interface CatRow {
+  name: string;
+  value: number;
+}
+
+// Categorical palette for the 100%-stacked "share" bar — identity of the top
+// segments (validated for the dark surface, fixed order, never cycled).
 const SLICE_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
 const OTHER_COLOR = '#64748b';
 
-// Single-hue sequential ramps for the ranked bar chart, darkest = largest value.
+// Single-hue sequential ramps (dark → light) for the ranked bars: darkest = largest.
 const INCOME_BAR_RAMP = ['#065f46', '#059669', '#10b981', '#34d399', '#6ee7b7'];
 const EXPENSE_BAR_RAMP = ['#9f1239', '#f43f5e', '#fb7185', '#fda4af', '#ffe4e6'];
 
-const MAX_SLICES = 8;
+/** Segments shown in the share bar before the rest collapse into "Other". */
+const SHARE_SLICES = 7;
+/** Ranked bars shown before the "Show all" toggle. */
+const RANKED_LIMIT = 12;
+/** Categories below this rupee value are counted as the "long tail". */
+const SMALL_CATEGORY = 5000;
 
-/** Collapse everything past `max` categories into a single "Other" row. */
-function bucketTop(rows: { name: string; value: number }[], max: number) {
+/** Collapse everything past `max` categories into a single "Other (N)" row. */
+function bucketTop(rows: CatRow[], max: number): CatRow[] {
   if (rows.length <= max) return rows;
   const head = rows.slice(0, max - 1);
   const rest = rows.slice(max - 1);
@@ -32,32 +42,77 @@ function bucketTop(rows: { name: string; value: number }[], max: number) {
 const sliceColor = (name: string, index: number) =>
   name.startsWith('Other') ? OTHER_COLOR : SLICE_COLORS[index % SLICE_COLORS.length];
 
+// ── Sequential ramp interpolation (so N bars get N shades of one hue) ────────
+const hexToRgb = (h: string): [number, number, number] => {
+  const n = parseInt(h.replace('#', ''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+const rgbToHex = (r: number, g: number, b: number) =>
+  '#' + [r, g, b].map((c) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('');
+
+/** `t` in [0,1] across the ramp stops (0 = first / darkest, 1 = last / lightest). */
+function lerpRamp(stops: string[], t: number): string {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
+  const pos = clamped * (stops.length - 1);
+  const i = Math.floor(pos);
+  if (i >= stops.length - 1) return stops[stops.length - 1];
+  const f = pos - i;
+  const a = hexToRgb(stops[i]);
+  const b = hexToRgb(stops[i + 1]);
+  return rgbToHex(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f);
+}
+
+/** Y-axis tick for the ranked bars: truncates long names, full name on hover. */
+const RankedYTick: React.FC<any> = ({ x, y, payload }) => {
+  const v: string = payload?.value ?? '';
+  const short = v.length > 22 ? v.slice(0, 21) + '…' : v;
+  return (
+    <text x={x} y={y} dy={3} textAnchor="end" fontSize={11} fill="#cbd5e1">
+      <title>{v}</title>
+      {short}
+    </text>
+  );
+};
+
+const toSortedRows = (totals: Record<string, number> | undefined): CatRow[] =>
+  Object.entries(totals || {})
+    .filter(([, val]) => val > 0)
+    .map(([name, value]) => ({ name, value: parseFloat(value.toFixed(2)) }))
+    .sort((a, b) => b.value - a.value);
+
 const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summary }) => {
   const [activeTab, setActiveTab] = useState<'expense' | 'income'>('expense');
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
-  const expenseChartData = Object.entries(summary.expenseCategoryTotals || {})
-    .filter(([, val]) => val > 0)
-    .map(([name, value]) => ({
-      name,
-      value: parseFloat(value.toFixed(2)),
-    }))
-    .sort((a, b) => b.value - a.value);
-
-  const incomeChartData = Object.entries(summary.incomeCategoryTotals || {})
-    .filter(([, val]) => val > 0)
-    .map(([name, value]) => ({
-      name,
-      value: parseFloat(value.toFixed(2)),
-    }))
-    .sort((a, b) => b.value - a.value);
+  const expenseChartData = toSortedRows(summary.expenseCategoryTotals);
+  const incomeChartData = toSortedRows(summary.incomeCategoryTotals);
 
   const currentChartData = activeTab === 'expense' ? expenseChartData : incomeChartData;
   const barRamp = activeTab === 'expense' ? EXPENSE_BAR_RAMP : INCOME_BAR_RAMP;
+  const accentText = activeTab === 'expense' ? 'text-rose-300' : 'text-emerald-300';
 
-  const pieData = bucketTop(currentChartData, MAX_SLICES);
-  const pieTotal = pieData.reduce((s, d) => s + d.value, 0);
-  const barData = currentChartData.slice(0, 6);
+  const grandTotal = currentChartData.reduce((s, d) => s + d.value, 0);
+
+  // 100%-stacked share bar: top 6 categories + "Other (N)"
+  const shareData = bucketTop(currentChartData, SHARE_SLICES);
+
+  // Concentration headline
+  const topN = Math.min(5, currentChartData.length);
+  const topNShare = grandTotal
+    ? Math.round((currentChartData.slice(0, topN).reduce((s, d) => s + d.value, 0) / grandTotal) * 100)
+    : 0;
+  const smallCount = currentChartData.filter((d) => d.value < SMALL_CATEGORY).length;
+
+  // Ranked horizontal bars
+  const rankedRows = showAll ? currentChartData : currentChartData.slice(0, RANKED_LIMIT);
+  const rankedMax = rankedRows.length ? rankedRows[0].value : 1;
+  const rankedHeight = Math.max(rankedRows.length * 34 + 8, 120);
+
+  const switchTab = (tab: 'expense' | 'income') => {
+    setActiveTab(tab);
+    setShowAll(false);
+  };
 
   return (
     <div className="space-y-5 mb-6">
@@ -163,167 +218,138 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
         </div>
       )}
 
-      {/* Visual Charts Container with Expense / Income Toggle Tabs */}
-      <div className="bg-slate-800/60 border border-slate-700/80 rounded-2xl p-5 shadow-lg space-y-5">
+      {/* Category Breakdown — full width */}
+      <div className="bg-slate-800/60 border border-slate-700/80 rounded-2xl p-5 shadow-lg space-y-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-700/60">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-indigo-400" />
-            <h3 className="text-base font-bold text-slate-100 m-0">Category Breakdown Charts</h3>
-            <button
-              onClick={() => setBreakdownOpen(true)}
-              title="View category totals as a table"
-              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-300 hover:bg-slate-700/50 border border-slate-700 transition-colors"
-            >
-              <Table2 className="w-4 h-4" />
-            </button>
+            <h3 className="text-base font-bold text-slate-100 m-0">Category Breakdown</h3>
           </div>
 
-          {/* Toggle Switch */}
-          <div className="flex items-center bg-slate-900/90 p-1 rounded-xl border border-slate-700 text-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center bg-slate-900/90 p-1 rounded-xl border border-slate-700 text-xs">
+              <button
+                onClick={() => switchTab('expense')}
+                className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+                  activeTab === 'expense' ? 'bg-rose-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <TrendingDown className="w-3.5 h-3.5" />
+                Expense ({expenseChartData.length})
+              </button>
+              <button
+                onClick={() => switchTab('income')}
+                className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+                  activeTab === 'income' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <TrendingUp className="w-3.5 h-3.5" />
+                Income ({incomeChartData.length})
+              </button>
+            </div>
             <button
-              onClick={() => setActiveTab('expense')}
-              className={`px-3.5 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
-                activeTab === 'expense'
-                  ? 'bg-rose-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              onClick={() => setBreakdownOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-slate-300 hover:text-white bg-slate-900/90 hover:bg-slate-700/60 border border-slate-700 transition-colors"
             >
-              <TrendingDown className="w-3.5 h-3.5" />
-              Expense Categories ({expenseChartData.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('income')}
-              className={`px-3.5 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
-                activeTab === 'income'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <TrendingUp className="w-3.5 h-3.5" />
-              Income Categories ({incomeChartData.length})
+              <Table2 className="w-3.5 h-3.5" />
+              Full table
             </button>
           </div>
         </div>
 
         {currentChartData.length === 0 ? (
           <div className="text-center py-12 text-slate-500 text-xs">
-            No tagged {activeTab} transactions available to render charts.
+            No tagged {activeTab} transactions yet — annotate some in the Transactions tab.
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Donut Chart */}
-            <div className="bg-slate-900/80 border border-slate-700/70 rounded-2xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <PieChartIcon className={`w-4 h-4 ${activeTab === 'expense' ? 'text-rose-400' : 'text-emerald-400'}`} />
-                <h4 className="text-xs font-semibold text-slate-200 m-0 uppercase tracking-wider">
-                  {activeTab === 'expense' ? 'Expense' : 'Income'} Share by Category
-                </h4>
-              </div>
-              <div className="h-52 w-full relative">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={58}
-                      outerRadius={86}
-                      paddingAngle={2}
-                      dataKey="value"
-                      stroke="#0f172a"
-                      strokeWidth={2}
-                      labelLine={false}
-                      label={(p: any) =>
-                        p.percent >= 0.1 ? (
-                          <text
-                            x={p.x}
-                            y={p.y}
-                            fill="#ffffff"
-                            fontSize={10}
-                            fontWeight={700}
-                            textAnchor={p.x > p.cx ? 'start' : 'end'}
-                            dominantBaseline="central"
-                          >
-                            {Math.round(p.percent * 100)}%
-                          </text>
-                        ) : null
-                      }
-                    >
-                      {pieData.map((d, index) => (
-                        <Cell key={`cell-${index}`} fill={sliceColor(d.name, index)} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      formatter={(value: any) => formatCurrency(Number(value))}
-                      contentStyle={{
-                        backgroundColor: '#0f172a',
-                        borderColor: '#334155',
-                        borderRadius: '0.75rem',
-                        color: '#f8fafc',
-                        fontSize: '12px',
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <span className="text-[9px] text-slate-500 uppercase tracking-wider">Total</span>
-                  <span className="text-sm font-bold text-slate-100 font-mono">{formatShort(pieTotal)}</span>
-                </div>
-              </div>
+          <>
+            {/* Concentration headline */}
+            <p className="text-xs text-slate-400 m-0">
+              Top <span className="font-semibold text-slate-200">{topN}</span>{' '}
+              categor{topN === 1 ? 'y' : 'ies'} ={' '}
+              <span className={`font-semibold ${accentText}`}>{topNShare}%</span> of{' '}
+              <span className="font-mono text-slate-300">{formatShort(grandTotal)}</span>
+              {smallCount > 0 && (
+                <>
+                  {' · '}
+                  <span className="text-slate-300">{smallCount}</span> below ₹5K
+                </>
+              )}
+              {' · '}
+              <span className="text-slate-300">{currentChartData.length}</span> categories total
+            </p>
 
-              {/* Always-visible value legend */}
-              <ul className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 list-none p-0 m-0">
-                {pieData.map((d, i) => (
-                  <li key={d.name} className="flex items-center justify-between gap-2 text-[11px]">
-                    <span className="flex items-center gap-1.5 min-w-0">
-                      <span
-                        className="w-2.5 h-2.5 rounded-sm shrink-0"
-                        style={{ backgroundColor: sliceColor(d.name, i) }}
-                      />
-                      <span className="truncate text-slate-300">{d.name}</span>
-                    </span>
-                    <span className="font-mono text-slate-400 shrink-0 tabular-nums">
-                      {formatShort(d.value)}
-                      <span className="text-slate-600">
-                        {' '}· {pieTotal ? Math.round((d.value / pieTotal) * 100) : 0}%
-                      </span>
-                    </span>
+            {/* 100%-stacked share bar */}
+            <div>
+              <div className="flex h-7 w-full gap-px rounded-lg overflow-hidden bg-slate-900">
+                {shareData.map((s, i) => {
+                  const pct = grandTotal ? (s.value / grandTotal) * 100 : 0;
+                  return (
+                    <div
+                      key={s.name}
+                      title={`${s.name}: ${formatCurrency(s.value)} · ${pct.toFixed(1)}%`}
+                      style={{ flexGrow: s.value, flexBasis: 0, backgroundColor: sliceColor(s.name, i) }}
+                      className="min-w-[3px] flex items-center justify-center overflow-hidden px-1"
+                    >
+                      {pct >= 9 && (
+                        <span className="text-[10px] font-bold text-white/95 tabular-nums">{Math.round(pct)}%</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 list-none p-0 m-0">
+                {shareData.map((s, i) => (
+                  <li key={s.name} className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                    <span
+                      className="w-2.5 h-2.5 rounded-sm shrink-0"
+                      style={{ backgroundColor: sliceColor(s.name, i) }}
+                    />
+                    <span className="text-slate-300">{s.name}</span>
+                    <span className="font-mono tabular-nums text-slate-500">{formatShort(s.value)}</span>
                   </li>
                 ))}
               </ul>
             </div>
 
-            {/* Bar Chart */}
-            <div className="bg-slate-900/80 border border-slate-700/70 rounded-2xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <BarChart3 className={`w-4 h-4 ${activeTab === 'expense' ? 'text-rose-400' : 'text-emerald-400'}`} />
-                <h4 className="text-xs font-semibold text-slate-200 m-0 uppercase tracking-wider">
-                  Top {activeTab === 'expense' ? 'Expenses' : 'Income Streams'} (₹)
+            {/* Ranked horizontal bars */}
+            <div className="bg-slate-900/70 border border-slate-700/70 rounded-2xl p-4">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <h4 className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider m-0">
+                  {activeTab === 'expense' ? 'Spending' : 'Income'} by category — ranked
                 </h4>
+                {currentChartData.length > RANKED_LIMIT && (
+                  <button
+                    onClick={() => setShowAll((v) => !v)}
+                    className="text-[11px] font-medium text-indigo-300 hover:text-indigo-200 flex items-center gap-1"
+                  >
+                    {showAll ? `Show top ${RANKED_LIMIT}` : `Show all ${currentChartData.length}`}
+                    <ChevronDown className={`w-3 h-3 transition-transform ${showAll ? 'rotate-180' : ''}`} />
+                  </button>
+                )}
               </div>
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={barData} margin={{ top: 18, right: 10, left: -12, bottom: 20 }} barCategoryGap="22%">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                    <XAxis
-                      dataKey="name"
-                      stroke="#94a3b8"
-                      fontSize={10}
-                      tickLine={false}
-                      interval={0}
-                      angle={-20}
-                      textAnchor="end"
-                    />
+              <div className="max-h-[460px] overflow-y-auto pr-1 -mr-1">
+                <ResponsiveContainer width="100%" height={rankedHeight}>
+                  <BarChart
+                    data={rankedRows}
+                    layout="vertical"
+                    margin={{ top: 2, right: 72, bottom: 2, left: 4 }}
+                    barCategoryGap="20%"
+                  >
+                    <CartesianGrid horizontal={false} stroke="#334155" strokeDasharray="3 3" />
+                    <XAxis type="number" hide domain={[0, 'dataMax']} />
                     <YAxis
-                      stroke="#94a3b8"
-                      fontSize={10}
+                      type="category"
+                      dataKey="name"
+                      width={150}
                       tickLine={false}
-                      width={48}
-                      tickFormatter={(v: number) => formatShort(v)}
+                      axisLine={false}
+                      interval={0}
+                      tick={<RankedYTick />}
                     />
                     <Tooltip
                       cursor={{ fill: '#33415533' }}
-                      formatter={(val: any) => formatCurrency(Number(val))}
+                      formatter={(val: any) => [formatCurrency(Number(val)), 'Amount']}
                       contentStyle={{
                         backgroundColor: '#0f172a',
                         borderColor: '#334155',
@@ -332,23 +358,23 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
                         fontSize: '12px',
                       }}
                     />
-                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {barData.map((d, i) => (
-                        <Cell key={d.name} fill={barRamp[Math.min(i, barRamp.length - 1)]} />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
+                      {rankedRows.map((d) => (
+                        <Cell key={d.name} fill={lerpRamp(barRamp, 1 - d.value / rankedMax)} />
                       ))}
                       <LabelList
                         dataKey="value"
-                        position="top"
+                        position="right"
                         formatter={(v: any) => formatShort(Number(v))}
                         fill="#94a3b8"
-                        fontSize={9}
+                        fontSize={10}
                       />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>
