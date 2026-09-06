@@ -115,6 +115,9 @@ export interface SummaryData {
   annotatedCount: number;
   expenseCategoryTotals: Record<string, number>;
   incomeCategoryTotals: Record<string, number>;
+  /** Number of (non-excluded) transactions per category, incl. an 'Uncategorized' key */
+  expenseCategoryCounts: Record<string, number>;
+  incomeCategoryCounts: Record<string, number>;
 }
 
 // Preset color palette for accounts (Tailwind utility strings)

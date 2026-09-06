@@ -3,7 +3,6 @@ import type { SummaryData } from '../types';
 import { TrendingUp, TrendingDown, Wallet, ArrowRightLeft, BarChart3, Ban, Table2, ChevronDown } from 'lucide-react';
 import { Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
 import { formatCurrency, formatShort } from '../utils/format';
-import { CategoryBreakdownModal } from './CategoryBreakdownModal';
 
 interface AnalyticsDashboardProps {
   summary: SummaryData;
@@ -82,7 +81,7 @@ const toSortedRows = (totals: Record<string, number> | undefined): CatRow[] =>
 
 const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summary }) => {
   const [activeTab, setActiveTab] = useState<'expense' | 'income'>('expense');
-  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [view, setView] = useState<'chart' | 'table'>('chart');
   const [showAll, setShowAll] = useState(false);
 
   const expenseChartData = toSortedRows(summary.expenseCategoryTotals);
@@ -109,6 +108,20 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
   const rankedMax = rankedRows.length ? rankedRows[0].value : 1;
   const rankedHeight = Math.max(rankedRows.length * 34 + 8, 120);
 
+  // Table view — categories + transaction counts + an "Uncategorized" row
+  const countsMap = activeTab === 'expense' ? summary.expenseCategoryCounts : summary.incomeCategoryCounts;
+  const typeTotal = activeTab === 'expense' ? summary.totalExpenses : summary.totalIncome;
+  const uncategorizedValue = Math.max(0, Math.round((typeTotal - grandTotal) * 100) / 100);
+  const uncategorizedCount = (countsMap || {}).Uncategorized || 0;
+  const tableRows: (CatRow & { count: number; muted?: boolean })[] = [
+    ...currentChartData.map((d) => ({ ...d, count: (countsMap || {})[d.name] || 0 })),
+    ...(uncategorizedValue > 0.005 || uncategorizedCount > 0
+      ? [{ name: 'Uncategorized', value: uncategorizedValue, count: uncategorizedCount, muted: true }]
+      : []),
+  ];
+  const tableTotalValue = tableRows.reduce((s, r) => s + r.value, 0);
+  const tableTotalCount = tableRows.reduce((s, r) => s + r.count, 0);
+
   const switchTab = (tab: 'expense' | 'income') => {
     setActiveTab(tab);
     setShowAll(false);
@@ -116,11 +129,6 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
 
   return (
     <div className="space-y-5 mb-6">
-      <CategoryBreakdownModal
-        isOpen={breakdownOpen}
-        onClose={() => setBreakdownOpen(false)}
-        summary={summary}
-      />
       {/* 4 Metric Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Opening Balance */}
@@ -222,7 +230,11 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
       <div className="bg-slate-800/60 border border-slate-700/80 rounded-2xl p-5 shadow-lg space-y-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-700/60">
           <div className="flex items-center gap-2">
-            <BarChart3 className="w-5 h-5 text-indigo-400" />
+            {view === 'chart' ? (
+              <BarChart3 className="w-5 h-5 text-indigo-400" />
+            ) : (
+              <Table2 className="w-5 h-5 text-indigo-400" />
+            )}
             <h3 className="text-base font-bold text-slate-100 m-0">Category Breakdown</h3>
           </div>
 
@@ -248,16 +260,81 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
               </button>
             </div>
             <button
-              onClick={() => setBreakdownOpen(true)}
+              onClick={() => setView((v) => (v === 'chart' ? 'table' : 'chart'))}
+              aria-pressed={view === 'table'}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-slate-300 hover:text-white bg-slate-900/90 hover:bg-slate-700/60 border border-slate-700 transition-colors"
             >
-              <Table2 className="w-3.5 h-3.5" />
-              Full table
+              {view === 'chart' ? (
+                <>
+                  <Table2 className="w-3.5 h-3.5" />
+                  Full table
+                </>
+              ) : (
+                <>
+                  <BarChart3 className="w-3.5 h-3.5" />
+                  Charts
+                </>
+              )}
             </button>
           </div>
         </div>
 
-        {currentChartData.length === 0 ? (
+        {view === 'table' ? (
+          tableRows.length === 0 ? (
+            <div className="text-center py-12 text-slate-500 text-xs">
+              No {activeTab} transactions yet.
+            </div>
+          ) : (
+            <div className="max-h-[460px] overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-900/70">
+              <table className="w-full text-xs border-collapse">
+                <thead className="sticky top-0 z-10 bg-slate-900 text-slate-400">
+                  <tr className="text-left border-b border-slate-700">
+                    <th className="py-2.5 px-3 font-semibold">Category</th>
+                    <th className="py-2.5 px-3 font-semibold text-right whitespace-nowrap">Transactions</th>
+                    <th className="py-2.5 px-3 font-semibold text-right">Amount</th>
+                    <th className="py-2.5 px-3 font-semibold text-right">Share</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {tableRows.map((r, i) => (
+                    <tr key={r.name} className="hover:bg-slate-800/40">
+                      <td className="py-2 px-3">
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span
+                            className="w-2 h-2 rounded-sm shrink-0"
+                            style={{
+                              backgroundColor: r.muted
+                                ? OTHER_COLOR
+                                : lerpRamp(barRamp, tableRows.length > 1 ? i / (tableRows.length - 1) : 0),
+                            }}
+                          />
+                          <span className={`truncate ${r.muted ? 'text-slate-500 italic' : 'text-slate-200'}`}>
+                            {r.name}
+                          </span>
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-300">{r.count}</td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-200">
+                        {formatCurrency(r.value)}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-400">
+                        {tableTotalValue ? ((r.value / tableTotalValue) * 100).toFixed(1) : '0.0'}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="sticky bottom-0 bg-slate-900 border-t border-slate-700 text-slate-200 font-semibold">
+                  <tr>
+                    <td className="py-2.5 px-3">Total — {tableRows.length} categor{tableRows.length === 1 ? 'y' : 'ies'}</td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums">{tableTotalCount}</td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums">{formatCurrency(tableTotalValue)}</td>
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums">100%</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )
+        ) : currentChartData.length === 0 ? (
           <div className="text-center py-12 text-slate-500 text-xs">
             No tagged {activeTab} transactions yet — annotate some in the Transactions tab.
           </div>

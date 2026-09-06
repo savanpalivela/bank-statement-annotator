@@ -728,6 +728,8 @@ export function App() {
     let grossIncome = 0, grossExpenses = 0;
     const expenseCategoryTotals: Record<string, number> = {};
     const incomeCategoryTotals: Record<string, number> = {};
+    const expenseCategoryCounts: Record<string, number> = {};
+    const incomeCategoryCounts: Record<string, number> = {};
 
     transactions.forEach((tx) => {
       // Gross figures always include every row so the closing balance still
@@ -746,7 +748,16 @@ export function App() {
 
       totalIncome += tx.credit;
       totalExpenses += tx.debit;
-      if (tx.category && tx.category !== 'Uncategorized') {
+
+      const isCategorized = !!tx.category && tx.category !== 'Uncategorized';
+      const bucket = isCategorized ? tx.category : 'Uncategorized';
+      if (tx.debit > 0) {
+        expenseCategoryCounts[bucket] = (expenseCategoryCounts[bucket] || 0) + 1;
+      } else if (tx.credit > 0) {
+        incomeCategoryCounts[bucket] = (incomeCategoryCounts[bucket] || 0) + 1;
+      }
+
+      if (isCategorized) {
         annotatedCount++;
         if (tx.debit > 0) {
           expenseCategoryTotals[tx.category] = (expenseCategoryTotals[tx.category] || 0) + tx.debit;
@@ -783,6 +794,8 @@ export function App() {
       annotatedCount,
       expenseCategoryTotals,
       incomeCategoryTotals,
+      expenseCategoryCounts,
+      incomeCategoryCounts,
     };
   }, [transactions]);
 
