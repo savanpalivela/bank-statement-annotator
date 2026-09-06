@@ -32,7 +32,7 @@ function bucketTop(rows: { name: string; value: number }[], max: number) {
 const sliceColor = (name: string, index: number) =>
   name.startsWith('Other') ? OTHER_COLOR : SLICE_COLORS[index % SLICE_COLORS.length];
 
-export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary }) => {
+const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summary }) => {
   const [activeTab, setActiveTab] = useState<'expense' | 'income'>('expense');
   const [breakdownOpen, setBreakdownOpen] = useState(false);
 
@@ -354,3 +354,10 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({ summary 
     </div>
   );
 };
+
+/**
+ * Memoised: `summary` is a stable useMemo in App keyed on `transactions`, so the
+ * charts only re-render when the underlying transaction data actually changes —
+ * not on every unrelated App state update (toasts, modals, tab switches).
+ */
+export const AnalyticsDashboard = React.memo(AnalyticsDashboardComponent);

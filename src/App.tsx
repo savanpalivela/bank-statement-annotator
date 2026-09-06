@@ -23,14 +23,18 @@ import { INITIAL_RULES, applyRulesToTransactions, normalizeRules } from './utils
 import { exportRulesToFile, parseImportedRules } from './utils/rulesIO';
 import { exportCategoriesToFile, parseImportedCategories } from './utils/categoriesIO';
 import { SessionsModal } from './components/SessionsModal';
+import { AccountsBar } from './components/AccountsBar';
 import { getSession, upsertSession, deleteSession, renameSession } from './utils/sessionStore';
 import { getAllNotes, putNote, bulkPutNotes, noteKey } from './utils/notesStore';
 import type { SavedSession, SessionData } from './utils/sessionStore';
-import { CheckCircle, AlertCircle, Files, AlertTriangle, RotateCcw, PlusCircle, X, Landmark, Layers } from 'lucide-react';
+import { CheckCircle, AlertCircle, Files, AlertTriangle, PlusCircle, X, Layers, LayoutDashboard, Table2 } from 'lucide-react';
 
 const LOCAL_STORAGE_RULES_KEY = 'bank_annotator_smart_rules_v1';
 const LOCAL_STORAGE_SESSION_KEY = 'bank_annotator_session_state_v2'; // bumped version for new schema
 const LOCAL_STORAGE_CATEGORIES_KEY = 'bank_annotator_categories_v2';
+const LOCAL_STORAGE_VIEW_KEY = 'bank_annotator_active_view_v1';
+
+type AppView = 'transactions' | 'dashboard';
 
 /** Create a short display label from a filename */
 function fileNameToLabel(fileName: string, index: number): string {
@@ -65,6 +69,18 @@ export function App() {
   const [isMappingModalOpen, setIsMappingModalOpen] = useState<string | null>(null); // accountId
   const [isAddAccountOpen, setIsAddAccountOpen] = useState(false);
   const [isSessionsOpen, setIsSessionsOpen] = useState(false);
+
+  // ── Active tab (Transactions ↔ Dashboard) ────────────────────────────────
+  const [activeView, setActiveView] = useState<AppView>(() => {
+    try {
+      const v = localStorage.getItem(LOCAL_STORAGE_VIEW_KEY);
+      if (v === 'transactions' || v === 'dashboard') return v;
+    } catch {}
+    return 'transactions';
+  });
+  useEffect(() => {
+    try { localStorage.setItem(LOCAL_STORAGE_VIEW_KEY, activeView); } catch {}
+  }, [activeView]);
 
   // ── Named session tracking ────────────────────────────────────────────────
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -103,6 +119,12 @@ export function App() {
     if (accounts.length === 1) return accounts[0].fileName;
     return `${accounts.length} accounts`;
   }, [accounts]);
+
+  const accountTxCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const tx of transactions) counts[tx.accountId] = (counts[tx.accountId] || 0) + 1;
+    return counts;
+  }, [transactions]);
 
   // ── Persist categories ────────────────────────────────────────────────────
   useEffect(() => {
@@ -842,72 +864,18 @@ export function App() {
           </div>
         ) : (
           <>
-            {/* ── Accounts Bar ─────────────────────────────────────────────── */}
-            <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4 space-y-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <span className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
-                  <Landmark className="w-4 h-4 text-indigo-400" />
-                  Accounts ({accounts.length})
-                  <span className="ml-1 text-slate-500">— {transactions.length} total transactions</span>
-                </span>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => setIsSessionsOpen(true)}
-                    className="text-xs bg-slate-700/60 hover:bg-slate-700 text-slate-200 border border-slate-600 px-3 py-1.5 rounded-xl font-medium flex items-center gap-1.5 transition-colors"
-                  >
-                    <Layers className="w-3.5 h-3.5" />
-                    {currentSessionName ? `Session: ${currentSessionName}` : 'Sessions'}
-                  </button>
-                  <button
-                    onClick={() => setIsAddAccountOpen(true)}
-                    className="text-xs bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 px-3 py-1.5 rounded-xl font-medium flex items-center gap-1.5 transition-colors"
-                  >
-                    <PlusCircle className="w-3.5 h-3.5" />
-                    Add Another Account
-                  </button>
-                  <button
-                    onClick={handleClearSession}
-                    className="text-xs bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/30 px-3 py-1.5 rounded-xl font-medium flex items-center gap-1 transition-colors"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Reset
-                  </button>
-                </div>
-              </div>
-
-              {/* Account Cards */}
-              <div className="flex flex-wrap gap-2">
-                {accounts.map((acc) => {
-                  const accTxCount = transactions.filter((tx) => tx.accountId === acc.id).length;
-                  return (
-                    <div
-                      key={acc.id}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium ${acc.color}`}
-                    >
-                      <Landmark className="w-3.5 h-3.5 shrink-0" />
-                      <span className="max-w-[160px] truncate" title={acc.label}>{acc.label}</span>
-                      <span className="opacity-60">({accTxCount})</span>
-                      <button
-                        onClick={() => setIsMappingModalOpen(acc.id)}
-                        title="Configure column mapping for this account"
-                        className="opacity-60 hover:opacity-100 transition-opacity ml-1"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-                      </button>
-                      {accounts.length > 1 && (
-                        <button
-                          onClick={() => handleRemoveAccount(acc.id)}
-                          title="Remove this account"
-                          className="opacity-60 hover:opacity-100 hover:text-rose-400 transition-all ml-0.5"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            {/* ── Common: Accounts strip (outside the tabs) ─────────────────── */}
+            <AccountsBar
+              accounts={accounts}
+              transactionCount={transactions.length}
+              accountTxCounts={accountTxCounts}
+              currentSessionName={currentSessionName}
+              onOpenSessions={() => setIsSessionsOpen(true)}
+              onAddAccount={() => setIsAddAccountOpen(true)}
+              onReset={handleClearSession}
+              onOpenMapping={(id) => setIsMappingModalOpen(id)}
+              onRemoveAccount={handleRemoveAccount}
+            />
 
             {/* Rejected Files Banner */}
             {rejectedFilesList.length > 0 && (
@@ -930,49 +898,80 @@ export function App() {
               </div>
             )}
 
-            {/* Analytics */}
-            <AnalyticsDashboard summary={summaryData} />
+            {/* ── Common: tab bar (outside the tab panels) ─────────────────── */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div
+                role="tablist"
+                aria-label="Views"
+                className="inline-flex items-center bg-slate-800/70 border border-slate-700 p-1 rounded-xl text-xs self-start"
+              >
+                <button
+                  role="tab"
+                  aria-selected={activeView === 'transactions'}
+                  onClick={() => setActiveView('transactions')}
+                  className={`px-3.5 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+                    activeView === 'transactions'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Table2 className="w-3.5 h-3.5" />
+                  Transactions
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                      activeView === 'transactions' ? 'bg-white/20 text-white' : 'bg-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {transactions.length}
+                  </span>
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={activeView === 'dashboard'}
+                  onClick={() => setActiveView('dashboard')}
+                  className={`px-3.5 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+                    activeView === 'dashboard'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <LayoutDashboard className="w-3.5 h-3.5" />
+                  Dashboard
+                </button>
+              </div>
 
-            {/* Toolbar */}
-            <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={() => setIsRulesModalOpen(true)}
-                className="flex items-center gap-2 text-xs font-semibold px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-colors"
+                className="flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-colors"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                 Smart Rules
                 {rules.length > 0 && (
                   <span className="bg-amber-500/30 text-amber-200 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-                    {rules.filter(r => r.enabled).length}/{rules.length}
+                    {rules.filter((r) => r.enabled).length}/{rules.length}
                   </span>
                 )}
               </button>
-              {accounts.map((acc) => (
-                <button
-                  key={acc.id}
-                  onClick={() => setIsMappingModalOpen(acc.id)}
-                  className={`flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-xl border transition-colors ${acc.color}`}
-                  title={`Configure mapping for ${acc.label}`}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-                  {acc.label}: Mapping
-                </button>
-              ))}
             </div>
 
-            {/* Transaction Table */}
-            <TransactionTable
-              transactions={transactions}
-              categories={allCategories}
-              categoryGroups={categories}
-              accounts={accounts}
-              onUpdateCategory={handleUpdateCategory}
-              onBulkUpdateCategory={handleBulkUpdateCategory}
-              onRenameAccount={handleRenameAccount}
-              onToggleExclude={handleToggleExclude}
-              onUpdateNote={handleUpdateNote}
-              multiAccount={accounts.length > 1}
-            />
+            {/* ── Tab panels — only the active one is mounted, so annotating in
+                   the table never re-renders the charts, and vice-versa ─────── */}
+            {activeView === 'transactions' ? (
+              <TransactionTable
+                transactions={transactions}
+                categories={allCategories}
+                categoryGroups={categories}
+                accounts={accounts}
+                onUpdateCategory={handleUpdateCategory}
+                onBulkUpdateCategory={handleBulkUpdateCategory}
+                onRenameAccount={handleRenameAccount}
+                onToggleExclude={handleToggleExclude}
+                onUpdateNote={handleUpdateNote}
+                multiAccount={accounts.length > 1}
+              />
+            ) : (
+              <AnalyticsDashboard summary={summaryData} />
+            )}
           </>
         )}
       </main>
