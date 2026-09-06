@@ -1,15 +1,29 @@
 import React, { useState, useMemo } from 'react';
-import type { Account, Transaction } from '../types';
-import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Ban, ChevronDown, RotateCcw, Pencil } from 'lucide-react';
+import type { Account, CategoryStructure, Transaction } from '../types';
+import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Ban, ChevronDown, RotateCcw, Pencil, Check, X } from 'lucide-react';
+import { TransactionNoteButton } from './TransactionNoteButton';
+
+/** Unique, alphabetically sorted, without the fixed "Uncategorized" entry. */
+const sortCats = (list: string[]): string[] =>
+  Array.from(new Set(list))
+    .filter((c) => c && c !== 'Uncategorized')
+    .sort((a, b) => a.localeCompare(b));
 
 interface TransactionTableProps {
   transactions: Transaction[];
+  /** Flat list of every category (used by the category filter) */
   categories: string[];
+  /** Categories split by type — expense rows only offer expense categories, income rows only income */
+  categoryGroups: CategoryStructure;
   accounts: Account[];
   onUpdateCategory: (id: string, newCategory: string) => void;
+  /** Set the same category on many transactions at once */
+  onBulkUpdateCategory: (ids: string[], newCategory: string) => void;
   onRenameAccount: (accountId: string, newLabel: string) => void;
   /** Toggle a transaction's "internal transfer" exclusion flag */
   onToggleExclude: (id: string) => void;
+  /** Persist a free-text note for a transaction ('' clears it) */
+  onUpdateNote: (id: string, note: string) => void;
   /** Show the per-row Account column (true when more than one account is loaded) */
   multiAccount: boolean;
 }
@@ -17,14 +31,20 @@ interface TransactionTableProps {
 export const TransactionTable: React.FC<TransactionTableProps> = ({
   transactions,
   categories,
+  categoryGroups,
   accounts,
   onUpdateCategory,
+  onBulkUpdateCategory,
   onRenameAccount,
   onToggleExclude,
+  onUpdateNote,
   multiAccount,
 }) => {
   const [renamingAccountId, setRenamingAccountId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCategory, setBulkCategory] = useState('Uncategorized');
+  const [bulkCustom, setBulkCustom] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'income' | 'expense'>('ALL');
@@ -39,16 +59,50 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
     return transactions.some((t) => t.runningBalance !== undefined);
   }, [transactions]);
 
+  // Category option lists — alphabetically sorted; "Uncategorized" is always a
+  // fixed first <option> rendered separately, so it is filtered out of these.
+  const allCategoriesSorted = useMemo(() => sortCats(categories), [categories]);
+  const expenseCategoriesSorted = useMemo(() => sortCats(categoryGroups.expense), [categoryGroups]);
+  const incomeCategoriesSorted = useMemo(() => sortCats(categoryGroups.income), [categoryGroups]);
+  const knownCategories = useMemo(() => new Set(categories), [categories]);
+
+  /** Which list of categories a given row may be annotated with. */
+  const categoriesForRow = (tx: Transaction): string[] => {
+    const isIncomeRow = tx.credit > 0 && tx.debit === 0;
+    const isExpenseRow = tx.debit > 0 && tx.credit === 0;
+    let base = isExpenseRow ? expenseCategoriesSorted : isIncomeRow ? incomeCategoriesSorted : allCategoriesSorted;
+    // Keep a currently-assigned category visible even if it belongs to the other type.
+    if (
+      tx.category &&
+      tx.category !== 'Uncategorized' &&
+      knownCategories.has(tx.category) &&
+      !base.includes(tx.category)
+    ) {
+      base = [...base, tx.category].sort((a, b) => a.localeCompare(b));
+    }
+    return base;
+  };
+
   // Filtering & Sorting — excluded internal transfers are pulled out into their own section
   const filteredTransactions = useMemo(() => {
     return transactions.filter((tx) => {
       if (tx.excluded) return false;
 
-      // Search term
+      // Search term — matches description, date, category, or the amount.
+      // For amounts, digits/decimal point are compared after stripping any
+      // currency symbol, spaces or grouping commas the user typed.
+      const term = searchTerm.toLowerCase();
+      const numericTerm = term.replace(/[^0-9.]/g, '');
+      const matchesAmount =
+        /[0-9]/.test(numericTerm) &&
+        [tx.debit, tx.credit, Math.abs(tx.amount)].some(
+          (n) => n > 0 && (String(n).includes(numericTerm) || n.toFixed(2).includes(numericTerm))
+        );
       const matchesSearch =
-        tx.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        tx.date.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        tx.category.toLowerCase().includes(searchTerm.toLowerCase());
+        tx.description.toLowerCase().includes(term) ||
+        tx.date.toLowerCase().includes(term) ||
+        tx.category.toLowerCase().includes(term) ||
+        matchesAmount;
 
       // Category filter
       const matchesCategory =
@@ -91,6 +145,63 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
     const start = (currentPage - 1) * pageSize;
     return sortedTransactions.slice(start, start + pageSize);
   }, [sortedTransactions, currentPage, pageSize]);
+
+  // ── Row selection / bulk edit ─────────────────────────────────────────────
+  const selectedInView = useMemo(
+    () => sortedTransactions.filter((t) => selectedIds.has(t.id)),
+    [sortedTransactions, selectedIds]
+  );
+  const allInViewSelected = sortedTransactions.length > 0 && selectedInView.length === sortedTransactions.length;
+
+  // Bulk-edit dropdown: offer only expense categories when every selected row is
+  // an expense (and vice-versa for income), otherwise the full list.
+  const bulkCategoriesSorted = useMemo(() => {
+    const anyIncome = selectedInView.some((t) => t.credit > 0 && t.debit === 0);
+    const anyExpense = selectedInView.some((t) => t.debit > 0 && t.credit === 0);
+    if (anyExpense && !anyIncome) return expenseCategoriesSorted;
+    if (anyIncome && !anyExpense) return incomeCategoriesSorted;
+    return allCategoriesSorted;
+  }, [selectedInView, expenseCategoriesSorted, incomeCategoriesSorted, allCategoriesSorted]);
+
+  const toggleRow = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (allInViewSelected) {
+        const next = new Set(prev);
+        sortedTransactions.forEach((t) => next.delete(t.id));
+        return next;
+      }
+      const next = new Set(prev);
+      sortedTransactions.forEach((t) => next.add(t.id));
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  // The stored bulk choice may no longer fit the current selection (e.g. an
+  // expense category left over after switching to income rows) — fall back safely.
+  const effectiveBulkCategory =
+    bulkCategory === 'CUSTOM' || bulkCategory === 'Uncategorized' || bulkCategoriesSorted.includes(bulkCategory)
+      ? bulkCategory
+      : 'Uncategorized';
+
+  const applyBulkCategory = () => {
+    const value = effectiveBulkCategory === 'CUSTOM' ? bulkCustom.trim() || 'Uncategorized' : effectiveBulkCategory;
+    const ids = selectedInView.map((t) => t.id);
+    if (ids.length === 0) return;
+    onBulkUpdateCategory(ids, value);
+    clearSelection();
+    setBulkCustom('');
+  };
 
   const handleCategorySelect = (id: string, value: string) => {
     if (value === 'CUSTOM') {
@@ -169,7 +280,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Search description, date, category..."
+            placeholder="Search description, date, category, amount..."
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value);
@@ -206,7 +317,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           >
             <option value="ALL">All Categories</option>
             <option value="Uncategorized">Uncategorized Only</option>
-            {categories.map((cat) => (
+            {allCategoriesSorted.map((cat) => (
               <option key={cat} value={cat}>
                 {cat}
               </option>
@@ -230,11 +341,72 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
         </div>
       </div>
 
+      {/* Bulk-edit bar (visible while rows are selected) */}
+      {selectedInView.length > 0 && (
+        <div className="px-4 py-2.5 border-b border-indigo-500/30 bg-indigo-950/30 flex flex-wrap items-center gap-2.5 text-xs">
+          <span className="font-semibold text-indigo-200">
+            {selectedInView.length} selected
+          </span>
+          <span className="text-slate-500">→ set category to</span>
+          <select
+            value={effectiveBulkCategory}
+            onChange={(e) => setBulkCategory(e.target.value)}
+            className="bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+          >
+            <option value="Uncategorized">Uncategorized</option>
+            {bulkCategoriesSorted.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+            <option value="CUSTOM">✏️ Custom…</option>
+          </select>
+          {effectiveBulkCategory === 'CUSTOM' && (
+            <input
+              type="text"
+              autoFocus
+              placeholder="New category name…"
+              value={bulkCustom}
+              onChange={(e) => setBulkCustom(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyBulkCategory()}
+              className="bg-slate-900 border border-indigo-500 text-slate-100 rounded-lg px-2 py-1.5 w-44 focus:outline-none"
+            />
+          )}
+          <button
+            onClick={applyBulkCategory}
+            disabled={effectiveBulkCategory === 'CUSTOM' && !bulkCustom.trim()}
+            className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-1.5 rounded-lg font-semibold"
+          >
+            <Check className="w-3.5 h-3.5" />
+            Apply
+          </button>
+          <button
+            onClick={clearSelection}
+            className="inline-flex items-center gap-1 text-slate-400 hover:text-white px-2 py-1.5"
+          >
+            <X className="w-3.5 h-3.5" />
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Responsive Scrollable Container */}
       <div className="overflow-x-auto w-full flex-1">
         <table className="w-full text-left text-xs border-collapse min-w-[700px]">
           <thead>
             <tr className="bg-slate-900/90 text-slate-400 border-b border-slate-700/80 font-semibold uppercase tracking-wider">
+              <th className="py-3 px-3 w-8 text-center">
+                <input
+                  type="checkbox"
+                  aria-label="Select all rows"
+                  checked={allInViewSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = selectedInView.length > 0 && !allInViewSelected;
+                  }}
+                  onChange={toggleSelectAll}
+                  className="rounded border-slate-600 bg-slate-800 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+              </th>
               <th className="py-3 px-3 w-10 text-center">#</th>
               <th
                 onClick={() => setSortAsc(!sortAsc)}
@@ -250,13 +422,13 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
               <th className="py-3 px-3 text-right w-36">Amount</th>
               {hasRunningBalance && <th className="py-3 px-3 text-right text-blue-300 w-32">Balance</th>}
               <th className="py-3 px-3 min-w-[200px] w-64">Category / Annotation</th>
-              <th className="py-3 px-3 w-12 text-center" title="Exclude as internal transfer">&nbsp;</th>
+              <th className="py-3 px-3 w-16 text-center" title="Note &amp; exclude">&nbsp;</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50 text-slate-300">
             {paginatedTransactions.length === 0 ? (
               <tr>
-                <td colSpan={(hasRunningBalance ? 7 : 6) + (multiAccount ? 1 : 0)} className="py-12 text-center text-slate-500">
+                <td colSpan={(hasRunningBalance ? 8 : 7) + (multiAccount ? 1 : 0)} className="py-12 text-center text-slate-500">
                   No matching transactions found.
                 </td>
               </tr>
@@ -264,6 +436,11 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
               paginatedTransactions.map((tx, idx) => {
                 const isIncome = tx.credit > 0;
                 const isExpense = tx.debit > 0;
+
+                const isSelected = selectedIds.has(tx.id);
+                const rowCategories = categoriesForRow(tx);
+                const isCustomCategory =
+                  !!tx.category && tx.category !== 'Uncategorized' && !knownCategories.has(tx.category);
 
                 return (
                   <tr
@@ -274,8 +451,18 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                         : isExpense
                         ? 'bg-rose-950/20'
                         : 'bg-transparent'
-                    }`}
+                    } ${isSelected ? 'shadow-[inset_3px_0_0_0_#818cf8]' : ''}`}
                   >
+                    <td className="py-3 px-3 text-center">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${tx.description}`}
+                        checked={isSelected}
+                        onChange={() => toggleRow(tx.id)}
+                        className="rounded border-slate-600 bg-slate-800 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                    </td>
+
                     <td className="py-3 px-3 text-center font-mono text-slate-500 text-[11px]">
                       {(currentPage - 1) * pageSize + idx + 1}
                     </td>
@@ -354,9 +541,9 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                         <div className="flex items-center gap-2 w-full">
                           <select
                             value={
-                              categories.includes(tx.category)
+                              knownCategories.has(tx.category)
                                 ? tx.category
-                                : tx.category && tx.category !== 'Uncategorized'
+                                : isCustomCategory
                                 ? 'CUSTOM'
                                 : 'Uncategorized'
                             }
@@ -368,7 +555,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                             }`}
                           >
                             <option value="Uncategorized">Uncategorized</option>
-                            {categories.map((cat) => (
+                            {rowCategories.map((cat) => (
                               <option key={cat} value={cat}>
                                 {cat}
                               </option>
@@ -376,9 +563,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                             <option value="CUSTOM">✏️ Custom Annotation...</option>
                           </select>
 
-                          {!categories.includes(tx.category) &&
-                            tx.category &&
-                            tx.category !== 'Uncategorized' && (
+                          {isCustomCategory && (
                               <span
                                 onClick={() => {
                                   setEditingId(tx.id);
@@ -394,15 +579,21 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                       )}
                     </td>
 
-                    {/* Exclude as internal transfer */}
-                    <td className="py-3 px-3 text-center">
-                      <button
-                        onClick={() => onToggleExclude(tx.id)}
-                        title="Exclude as internal transfer (e.g. transfer to OD account) — keeps it in the balance but out of expense totals"
-                        className="text-slate-500 hover:text-amber-400 transition-colors p-1"
-                      >
-                        <Ban className="w-3.5 h-3.5" />
-                      </button>
+                    {/* Note + exclude-as-internal-transfer */}
+                    <td className="py-3 px-3">
+                      <div className="flex items-center justify-center gap-0.5">
+                        <TransactionNoteButton
+                          note={tx.note || ''}
+                          onSave={(text) => onUpdateNote(tx.id, text)}
+                        />
+                        <button
+                          onClick={() => onToggleExclude(tx.id)}
+                          title="Exclude as internal transfer (e.g. transfer to OD account) — keeps it in the balance but out of expense totals"
+                          className="text-slate-500 hover:text-amber-400 transition-colors p-1"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -445,15 +636,21 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                       <td className="py-2 px-3 text-slate-500 whitespace-nowrap max-w-[140px] truncate" title={tx.accountLabel}>
                         {tx.accountLabel}
                       </td>
-                      <td className="py-2 px-3 text-right w-24">
-                        <button
-                          onClick={() => onToggleExclude(tx.id)}
-                          className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
-                          title="Include this transaction back in the totals"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          Include
-                        </button>
+                      <td className="py-2 px-3 text-right w-32">
+                        <div className="flex items-center justify-end gap-1">
+                          <TransactionNoteButton
+                            note={tx.note || ''}
+                            onSave={(text) => onUpdateNote(tx.id, text)}
+                          />
+                          <button
+                            onClick={() => onToggleExclude(tx.id)}
+                            className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                            title="Include this transaction back in the totals"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            Include
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

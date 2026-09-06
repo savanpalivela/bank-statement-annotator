@@ -24,6 +24,7 @@ import { exportRulesToFile, parseImportedRules } from './utils/rulesIO';
 import { exportCategoriesToFile, parseImportedCategories } from './utils/categoriesIO';
 import { SessionsModal } from './components/SessionsModal';
 import { getSession, upsertSession, deleteSession, renameSession } from './utils/sessionStore';
+import { getAllNotes, putNote, bulkPutNotes, noteKey } from './utils/notesStore';
 import type { SavedSession, SessionData } from './utils/sessionStore';
 import { CheckCircle, AlertCircle, Files, AlertTriangle, RotateCcw, PlusCircle, X, Landmark, Layers } from 'lucide-react';
 
@@ -155,6 +156,40 @@ export function App() {
       }
     } catch {}
   }, [accounts, transactions, isUsingSample, rejectedFilesList, currentSessionId, currentSessionName]);
+
+  // ── Hydrate per-transaction notes from IndexedDB ──────────────────────────
+  // Notes are keyed by transaction *content* (see notesStore.noteKey) so they
+  // re-attach after a re-parse, a session load, or a re-upload of the same file.
+  const notesHydratedForRef = useRef<string>('');
+  useEffect(() => {
+    if (transactions.length === 0) {
+      notesHydratedForRef.current = '';
+      return;
+    }
+    const sig = transactions.map((t) => t.id).join(',');
+    if (notesHydratedForRef.current === sig) return;
+    let cancelled = false;
+    getAllNotes().then((map) => {
+      if (cancelled) return;
+      notesHydratedForRef.current = sig;
+      if (map.size === 0) return;
+      setTransactions((prev) => {
+        let changed = false;
+        const next = prev.map((tx) => {
+          const stored = map.get(noteKey(tx)) ?? '';
+          if (stored !== (tx.note ?? '')) {
+            changed = true;
+            return { ...tx, note: stored || undefined };
+          }
+          return tx;
+        });
+        return changed ? next : prev;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [transactions]);
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   const triggerNotification = (message: string, type: 'success' | 'info' = 'success') => {
@@ -313,6 +348,13 @@ export function App() {
       return;
     }
     const { accounts: a, transactions: t, isUsingSample: s, rejectedFilesList: r } = session.data;
+    // Re-seed IndexedDB with any notes this session carries, so they persist
+    // even if they were only ever saved inside the session payload.
+    void bulkPutNotes(
+      (t || [])
+        .filter((tx) => tx.note && tx.note.trim())
+        .map((tx) => ({ key: noteKey(tx), note: tx.note as string }))
+    );
     rawDataMapRef.current.clear();
     reconstructRawDataMap(t).forEach((rows, accId) => rawDataMapRef.current.set(accId, rows));
     setAccounts(a || []);
@@ -522,9 +564,36 @@ export function App() {
     setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, category: newCategory } : tx)));
   };
 
+  // ── Bulk Category Update ──────────────────────────────────────────────────
+  const handleBulkUpdateCategory = (ids: string[], newCategory: string) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    if (newCategory && newCategory !== 'Uncategorized' && !allCategories.includes(newCategory)) {
+      const selected = transactions.filter((t) => idSet.has(t.id));
+      const anyIncome = selected.some((t) => t.credit > 0 && t.debit === 0);
+      const anyExpense = selected.some((t) => t.debit > 0);
+      const targetType: 'income' | 'expense' = anyIncome && !anyExpense ? 'income' : 'expense';
+      setCategories((prev) => ({ ...prev, [targetType]: [...prev[targetType], newCategory] }));
+    }
+    setTransactions((prev) => prev.map((tx) => (idSet.has(tx.id) ? { ...tx, category: newCategory } : tx)));
+    triggerNotification(
+      `Set ${ids.length} transaction${ids.length === 1 ? '' : 's'} to "${newCategory || 'Uncategorized'}".`
+    );
+  };
+
   // ── Toggle "exclude as internal transfer" ─────────────────────────────────
   const handleToggleExclude = (id: string) => {
     setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, excluded: !tx.excluded } : tx)));
+  };
+
+  // ── Per-transaction note (persisted in IndexedDB, mirrored on the tx) ─────
+  const handleUpdateNote = (id: string, note: string) => {
+    const target = transactions.find((t) => t.id === id);
+    if (target) void putNote(noteKey(target), note);
+    setTransactions((prev) =>
+      prev.map((tx) => (tx.id === id ? { ...tx, note: note.trim() || undefined } : tx))
+    );
+    triggerNotification(note.trim() ? 'Note saved.' : 'Note removed.', 'info');
   };
 
   // ── Rule Handlers ─────────────────────────────────────────────────────────
@@ -895,10 +964,13 @@ export function App() {
             <TransactionTable
               transactions={transactions}
               categories={allCategories}
+              categoryGroups={categories}
               accounts={accounts}
               onUpdateCategory={handleUpdateCategory}
+              onBulkUpdateCategory={handleBulkUpdateCategory}
               onRenameAccount={handleRenameAccount}
               onToggleExclude={handleToggleExclude}
+              onUpdateNote={handleUpdateNote}
               multiAccount={accounts.length > 1}
             />
           </>
