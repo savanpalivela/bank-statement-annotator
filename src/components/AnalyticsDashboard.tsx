@@ -1,26 +1,21 @@
 import React, { useState } from 'react';
 import type { SummaryData } from '../types';
-import { TrendingUp, TrendingDown, Wallet, ArrowRightLeft, BarChart3, Ban, Table2, ChevronDown } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, ArrowRightLeft, BarChart3, Ban, Table2, ChevronDown, FileDown } from 'lucide-react';
 import { Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList } from 'recharts';
 import { formatCurrency, formatShort } from '../utils/format';
+import type { CatRow } from '../utils/palette';
+import {
+  EXPENSE_BAR_RAMP,
+  INCOME_BAR_RAMP,
+  OTHER_COLOR,
+  bucketTop,
+  lerpRamp,
+  sliceColor,
+} from '../utils/palette';
 
 interface AnalyticsDashboardProps {
   summary: SummaryData;
 }
-
-interface CatRow {
-  name: string;
-  value: number;
-}
-
-// Categorical palette for the 100%-stacked "share" bar — identity of the top
-// segments (validated for the dark surface, fixed order, never cycled).
-const SLICE_COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
-const OTHER_COLOR = '#64748b';
-
-// Single-hue sequential ramps (dark → light) for the ranked bars: darkest = largest.
-const INCOME_BAR_RAMP = ['#065f46', '#059669', '#10b981', '#34d399', '#6ee7b7'];
-const EXPENSE_BAR_RAMP = ['#9f1239', '#f43f5e', '#fb7185', '#fda4af', '#ffe4e6'];
 
 /** Segments shown in the share bar before the rest collapse into "Other". */
 const SHARE_SLICES = 7;
@@ -28,38 +23,6 @@ const SHARE_SLICES = 7;
 const RANKED_LIMIT = 12;
 /** Categories below this rupee value are counted as the "long tail". */
 const SMALL_CATEGORY = 5000;
-
-/** Collapse everything past `max` categories into a single "Other (N)" row. */
-function bucketTop(rows: CatRow[], max: number): CatRow[] {
-  if (rows.length <= max) return rows;
-  const head = rows.slice(0, max - 1);
-  const rest = rows.slice(max - 1);
-  const otherValue = rest.reduce((s, r) => s + r.value, 0);
-  return [...head, { name: `Other (${rest.length})`, value: Math.round(otherValue * 100) / 100 }];
-}
-
-const sliceColor = (name: string, index: number) =>
-  name.startsWith('Other') ? OTHER_COLOR : SLICE_COLORS[index % SLICE_COLORS.length];
-
-// ── Sequential ramp interpolation (so N bars get N shades of one hue) ────────
-const hexToRgb = (h: string): [number, number, number] => {
-  const n = parseInt(h.replace('#', ''), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-};
-const rgbToHex = (r: number, g: number, b: number) =>
-  '#' + [r, g, b].map((c) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('');
-
-/** `t` in [0,1] across the ramp stops (0 = first / darkest, 1 = last / lightest). */
-function lerpRamp(stops: string[], t: number): string {
-  const clamped = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
-  const pos = clamped * (stops.length - 1);
-  const i = Math.floor(pos);
-  if (i >= stops.length - 1) return stops[stops.length - 1];
-  const f = pos - i;
-  const a = hexToRgb(stops[i]);
-  const b = hexToRgb(stops[i + 1]);
-  return rgbToHex(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f);
-}
 
 /** Y-axis tick for the ranked bars: truncates long names, full name on hover. */
 const RankedYTick: React.FC<any> = ({ x, y, payload }) => {
@@ -125,6 +88,20 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
   const switchTab = (tab: 'expense' | 'income') => {
     setActiveTab(tab);
     setShowAll(false);
+  };
+
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const handleDownloadPdf = async () => {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const { exportDashboardPdf } = await import('../utils/dashboardPdf');
+      await exportDashboardPdf(summary);
+    } catch (err) {
+      console.error('Dashboard PDF export failed', err);
+    } finally {
+      setPdfBusy(false);
+    }
   };
 
   return (
@@ -275,6 +252,15 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
                   Charts
                 </>
               )}
+            </button>
+            <button
+              onClick={handleDownloadPdf}
+              disabled={pdfBusy}
+              title="Download every view (expense & income, charts & table) as a PDF"
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-slate-300 hover:text-white bg-slate-900/90 hover:bg-slate-700/60 border border-slate-700 transition-colors disabled:opacity-50"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              {pdfBusy ? 'Preparing…' : 'PDF'}
             </button>
           </div>
         </div>
