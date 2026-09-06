@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import type { CategoryStructure } from '../types';
-import { Tag, Plus, Pencil, Trash2, X, Check, TrendingDown, TrendingUp } from 'lucide-react';
+import { Tag, Plus, Pencil, Trash2, X, Check, TrendingDown, TrendingUp, Download, Upload } from 'lucide-react';
 
 interface CategoryManagerModalProps {
   isOpen: boolean;
@@ -9,6 +9,8 @@ interface CategoryManagerModalProps {
   onAddCategory: (type: 'income' | 'expense', category: string) => void;
   onUpdateCategory: (type: 'income' | 'expense', oldCategory: string, newCategory: string) => void;
   onDeleteCategory: (type: 'income' | 'expense', category: string) => void;
+  onExportCategories: () => void;
+  onImportCategories: (text: string) => void;
 }
 
 export const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
@@ -18,7 +20,20 @@ export const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
   onAddCategory,
   onUpdateCategory,
   onDeleteCategory,
+  onExportCategories,
+  onImportCategories,
 }) => {
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => onImportCategories(String(reader.result || ''));
+    reader.onerror = () => onImportCategories('');
+    reader.readAsText(file);
+  };
   const [activeTab, setActiveTab] = useState<'expense' | 'income'>('expense');
   const [newCatName, setNewCatName] = useState('');
   const [editingCat, setEditingCat] = useState<string | null>(null);
@@ -243,7 +258,32 @@ export const CategoryManagerModal: React.FC<CategoryManagerModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/90 flex justify-end">
+        <div className="p-4 border-t border-slate-800 bg-slate-900/90 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onExportCategories}
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5"
+              title="Export categories to a .json file"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export
+            </button>
+            <button
+              onClick={() => importInputRef.current?.click()}
+              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5"
+              title="Import categories from a .json file"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              Import
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={handleImportFile}
+              className="hidden"
+            />
+          </div>
           <button
             onClick={onClose}
             className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition-colors"

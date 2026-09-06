@@ -10,6 +10,8 @@ interface ColumnMappingModalProps {
   mapping: ColumnMapping;
   onChangeMapping: (newMapping: ColumnMapping) => void;
   onApplyMapping: () => void;
+  /** Which account this mapping belongs to (shown in the header) */
+  accountLabel?: string;
 }
 
 export const ColumnMappingModal: React.FC<ColumnMappingModalProps> = ({
@@ -19,6 +21,7 @@ export const ColumnMappingModal: React.FC<ColumnMappingModalProps> = ({
   mapping,
   onChangeMapping,
   onApplyMapping,
+  accountLabel,
 }) => {
   // Close on Escape key
   useEffect(() => {
@@ -54,7 +57,9 @@ export const ColumnMappingModal: React.FC<ColumnMappingModalProps> = ({
               <Sliders className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-100">Smart Column Mapping</h2>
+              <h2 className="text-base font-bold text-slate-100">
+                Smart Column Mapping{accountLabel ? ` — ${accountLabel}` : ''}
+              </h2>
               <p className="text-xs text-slate-400">
                 Map spreadsheet columns to transaction attributes
               </p>
