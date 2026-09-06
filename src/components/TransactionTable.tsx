@@ -1,11 +1,20 @@
 import React, { useState, useMemo } from 'react';
-import type { Account, Transaction } from '../types';
+import type { Account, CategoryStructure, Transaction } from '../types';
 import { Search, ChevronLeft, ChevronRight, ArrowUpDown, Ban, ChevronDown, RotateCcw, Pencil, Check, X } from 'lucide-react';
 import { TransactionNoteButton } from './TransactionNoteButton';
 
+/** Unique, alphabetically sorted, without the fixed "Uncategorized" entry. */
+const sortCats = (list: string[]): string[] =>
+  Array.from(new Set(list))
+    .filter((c) => c && c !== 'Uncategorized')
+    .sort((a, b) => a.localeCompare(b));
+
 interface TransactionTableProps {
   transactions: Transaction[];
+  /** Flat list of every category (used by the category filter) */
   categories: string[];
+  /** Categories split by type — expense rows only offer expense categories, income rows only income */
+  categoryGroups: CategoryStructure;
   accounts: Account[];
   onUpdateCategory: (id: string, newCategory: string) => void;
   /** Set the same category on many transactions at once */
@@ -22,6 +31,7 @@ interface TransactionTableProps {
 export const TransactionTable: React.FC<TransactionTableProps> = ({
   transactions,
   categories,
+  categoryGroups,
   accounts,
   onUpdateCategory,
   onBulkUpdateCategory,
@@ -48,6 +58,30 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
   const hasRunningBalance = useMemo(() => {
     return transactions.some((t) => t.runningBalance !== undefined);
   }, [transactions]);
+
+  // Category option lists — alphabetically sorted; "Uncategorized" is always a
+  // fixed first <option> rendered separately, so it is filtered out of these.
+  const allCategoriesSorted = useMemo(() => sortCats(categories), [categories]);
+  const expenseCategoriesSorted = useMemo(() => sortCats(categoryGroups.expense), [categoryGroups]);
+  const incomeCategoriesSorted = useMemo(() => sortCats(categoryGroups.income), [categoryGroups]);
+  const knownCategories = useMemo(() => new Set(categories), [categories]);
+
+  /** Which list of categories a given row may be annotated with. */
+  const categoriesForRow = (tx: Transaction): string[] => {
+    const isIncomeRow = tx.credit > 0 && tx.debit === 0;
+    const isExpenseRow = tx.debit > 0 && tx.credit === 0;
+    let base = isExpenseRow ? expenseCategoriesSorted : isIncomeRow ? incomeCategoriesSorted : allCategoriesSorted;
+    // Keep a currently-assigned category visible even if it belongs to the other type.
+    if (
+      tx.category &&
+      tx.category !== 'Uncategorized' &&
+      knownCategories.has(tx.category) &&
+      !base.includes(tx.category)
+    ) {
+      base = [...base, tx.category].sort((a, b) => a.localeCompare(b));
+    }
+    return base;
+  };
 
   // Filtering & Sorting — excluded internal transfers are pulled out into their own section
   const filteredTransactions = useMemo(() => {
@@ -109,6 +143,16 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
   );
   const allInViewSelected = sortedTransactions.length > 0 && selectedInView.length === sortedTransactions.length;
 
+  // Bulk-edit dropdown: offer only expense categories when every selected row is
+  // an expense (and vice-versa for income), otherwise the full list.
+  const bulkCategoriesSorted = useMemo(() => {
+    const anyIncome = selectedInView.some((t) => t.credit > 0 && t.debit === 0);
+    const anyExpense = selectedInView.some((t) => t.debit > 0 && t.credit === 0);
+    if (anyExpense && !anyIncome) return expenseCategoriesSorted;
+    if (anyIncome && !anyExpense) return incomeCategoriesSorted;
+    return allCategoriesSorted;
+  }, [selectedInView, expenseCategoriesSorted, incomeCategoriesSorted, allCategoriesSorted]);
+
   const toggleRow = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -133,8 +177,15 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
 
   const clearSelection = () => setSelectedIds(new Set());
 
+  // The stored bulk choice may no longer fit the current selection (e.g. an
+  // expense category left over after switching to income rows) — fall back safely.
+  const effectiveBulkCategory =
+    bulkCategory === 'CUSTOM' || bulkCategory === 'Uncategorized' || bulkCategoriesSorted.includes(bulkCategory)
+      ? bulkCategory
+      : 'Uncategorized';
+
   const applyBulkCategory = () => {
-    const value = bulkCategory === 'CUSTOM' ? bulkCustom.trim() || 'Uncategorized' : bulkCategory;
+    const value = effectiveBulkCategory === 'CUSTOM' ? bulkCustom.trim() || 'Uncategorized' : effectiveBulkCategory;
     const ids = selectedInView.map((t) => t.id);
     if (ids.length === 0) return;
     onBulkUpdateCategory(ids, value);
@@ -256,7 +307,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           >
             <option value="ALL">All Categories</option>
             <option value="Uncategorized">Uncategorized Only</option>
-            {categories.map((cat) => (
+            {allCategoriesSorted.map((cat) => (
               <option key={cat} value={cat}>
                 {cat}
               </option>
@@ -288,19 +339,19 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           </span>
           <span className="text-slate-500">→ set category to</span>
           <select
-            value={bulkCategory}
+            value={effectiveBulkCategory}
             onChange={(e) => setBulkCategory(e.target.value)}
             className="bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
           >
             <option value="Uncategorized">Uncategorized</option>
-            {categories.map((cat) => (
+            {bulkCategoriesSorted.map((cat) => (
               <option key={cat} value={cat}>
                 {cat}
               </option>
             ))}
             <option value="CUSTOM">✏️ Custom…</option>
           </select>
-          {bulkCategory === 'CUSTOM' && (
+          {effectiveBulkCategory === 'CUSTOM' && (
             <input
               type="text"
               autoFocus
@@ -313,7 +364,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
           )}
           <button
             onClick={applyBulkCategory}
-            disabled={bulkCategory === 'CUSTOM' && !bulkCustom.trim()}
+            disabled={effectiveBulkCategory === 'CUSTOM' && !bulkCustom.trim()}
             className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white px-3 py-1.5 rounded-lg font-semibold"
           >
             <Check className="w-3.5 h-3.5" />
@@ -377,6 +428,9 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                 const isExpense = tx.debit > 0;
 
                 const isSelected = selectedIds.has(tx.id);
+                const rowCategories = categoriesForRow(tx);
+                const isCustomCategory =
+                  !!tx.category && tx.category !== 'Uncategorized' && !knownCategories.has(tx.category);
 
                 return (
                   <tr
@@ -477,9 +531,9 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                         <div className="flex items-center gap-2 w-full">
                           <select
                             value={
-                              categories.includes(tx.category)
+                              knownCategories.has(tx.category)
                                 ? tx.category
-                                : tx.category && tx.category !== 'Uncategorized'
+                                : isCustomCategory
                                 ? 'CUSTOM'
                                 : 'Uncategorized'
                             }
@@ -491,7 +545,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                             }`}
                           >
                             <option value="Uncategorized">Uncategorized</option>
-                            {categories.map((cat) => (
+                            {rowCategories.map((cat) => (
                               <option key={cat} value={cat}>
                                 {cat}
                               </option>
@@ -499,9 +553,7 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
                             <option value="CUSTOM">✏️ Custom Annotation...</option>
                           </select>
 
-                          {!categories.includes(tx.category) &&
-                            tx.category &&
-                            tx.category !== 'Uncategorized' && (
+                          {isCustomCategory && (
                               <span
                                 onClick={() => {
                                   setEditingId(tx.id);

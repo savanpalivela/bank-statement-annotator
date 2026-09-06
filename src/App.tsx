@@ -964,6 +964,7 @@ export function App() {
             <TransactionTable
               transactions={transactions}
               categories={allCategories}
+              categoryGroups={categories}
               accounts={accounts}
               onUpdateCategory={handleUpdateCategory}
               onBulkUpdateCategory={handleBulkUpdateCategory}
