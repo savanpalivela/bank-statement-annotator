@@ -1,4 +1,4 @@
-import type { LookupMatchMode, Rule, RuleCondition, Transaction } from '../types';
+import type { LookupMatchField, LookupMatchMode, Rule, RuleCondition, Transaction } from '../types';
 
 // ── Rule normalisation ──────────────────────────────────────────────────────
 /**
@@ -26,6 +26,7 @@ export function normalizeRule(rule: Rule): Rule {
     accountId: rule.accountId ?? 'ALL',
     // 'annotateFromFile' rules only — carried through untouched so the mapper
     // hint and last-run stats survive a normalize (localStorage load, export, etc).
+    matchField: rule.matchField,
     matchMode: rule.matchMode,
     matchColumnHint: rule.matchColumnHint,
     lastRun: rule.lastRun,
@@ -185,17 +186,21 @@ export function applyRulesToTransactions(
 // duration of one "Run" and is supplied fresh by the caller each time; the
 // category assigned is one of the app's own categories, chosen at run time.
 
-function matchDescription(description: string, value: string, mode: LookupMatchMode = 'contains'): boolean {
-  const source = description.toLowerCase().trim();
+function lookupFieldValue(tx: Transaction, field: LookupMatchField = 'description'): string {
+  return field === 'date' ? tx.date || '' : tx.description || '';
+}
+
+function matchDescription(source: string, value: string, mode: LookupMatchMode = 'contains'): boolean {
+  const src = source.toLowerCase().trim();
   const target = value.toLowerCase().trim();
   if (!target) return false;
   switch (mode) {
     case 'equals':
-      return source === target;
+      return src === target;
     case 'startsWith':
-      return source.startsWith(target);
+      return src.startsWith(target);
     default:
-      return source.includes(target);
+      return src.includes(target);
   }
 }
 
@@ -226,6 +231,7 @@ export function applyFileLookupRule(
   category: string,
   overrideExisting: boolean = false
 ): FileLookupRunResult {
+  const field = rule.matchField ?? 'description';
   const mode = rule.matchMode ?? 'contains';
   const ids = lookupRows.map((row) => String(row[matchColumn] ?? '').trim()).filter((id) => id !== '');
 
@@ -233,7 +239,7 @@ export function applyFileLookupRule(
   const matchedIds: string[] = [];
   const updatedTransactions = transactions.map((tx) => {
     if (!ruleScopeMatches(rule, tx, overrideExisting)) return tx;
-    if (!ids.some((id) => matchDescription(tx.description, id, mode))) return tx;
+    if (!ids.some((id) => matchDescription(lookupFieldValue(tx, field), id, mode))) return tx;
     matched++;
     matchedIds.push(tx.id);
     return { ...tx, category };

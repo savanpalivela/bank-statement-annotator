@@ -45,7 +45,10 @@ export interface ColumnMapping {
 
 export type RuleAction = 'categorize' | 'exclude' | 'annotateFromFile';
 
-/** How a file-lookup rule's identifier column is compared against the description */
+/** Which transaction field a file-lookup rule's identifier is compared against */
+export type LookupMatchField = 'description' | 'date';
+
+/** How a file-lookup rule's identifier is compared against that field */
 export type LookupMatchMode = 'contains' | 'equals' | 'startsWith';
 
 export type ConditionField = 'description' | 'amount' | 'date';
@@ -97,7 +100,9 @@ export interface Rule {
   appliesTo?: RuleAppliesTo;
 
   // ---- 'annotateFromFile' rules only ----
-  /** How the uploaded file's identifier column is matched against the description */
+  /** Which transaction field the uploaded file's identifier is matched against — default 'description' */
+  matchField?: LookupMatchField;
+  /** How the identifier is compared against that field */
   matchMode?: LookupMatchMode;
   /** Remembered identifier-column header name from the last run, to pre-fill the mapper — NOT the file's data */
   matchColumnHint?: string;

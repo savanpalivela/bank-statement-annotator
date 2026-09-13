@@ -3,6 +3,7 @@ import type {
   Account,
   ConditionField,
   ConditionOperator,
+  LookupMatchField,
   LookupMatchMode,
   Rule,
   RuleAppliesTo,
@@ -36,10 +37,15 @@ interface RuleEngineSidebarProps {
   onImportRules: (text: string) => void;
 }
 
+const LOOKUP_MATCH_FIELDS: { value: LookupMatchField; label: string }[] = [
+  { value: 'description', label: 'Description' },
+  { value: 'date', label: 'Date' },
+];
+
 const LOOKUP_MATCH_MODES: { value: LookupMatchMode; label: string }[] = [
-  { value: 'contains', label: 'Description contains the identifier' },
-  { value: 'equals', label: 'Description equals the identifier' },
-  { value: 'startsWith', label: 'Description starts with the identifier' },
+  { value: 'contains', label: 'Contains the identifier' },
+  { value: 'equals', label: 'Equals the identifier' },
+  { value: 'startsWith', label: 'Starts with the identifier' },
 ];
 
 const TEXT_OPERATORS: { value: ConditionOperator; label: string }[] = [
@@ -119,6 +125,7 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
   const [lookupName, setLookupName] = useState('');
   const [lookupAccountId, setLookupAccountId] = useState('ALL');
   const [lookupAppliesTo, setLookupAppliesTo] = useState<RuleAppliesTo>('uncategorized');
+  const [lookupMatchField, setLookupMatchField] = useState<LookupMatchField>('description');
   const [lookupMatchMode, setLookupMatchMode] = useState<LookupMatchMode>('contains');
   const [runningLookupRule, setRunningLookupRule] = useState<Rule | null>(null);
 
@@ -126,6 +133,7 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
     setLookupName('');
     setLookupAccountId('ALL');
     setLookupAppliesTo('uncategorized');
+    setLookupMatchField('description');
     setLookupMatchMode('contains');
     setShowAddLookupForm(false);
     setEditingLookupRuleId(null);
@@ -145,6 +153,7 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
     setLookupName(rule.name);
     setLookupAccountId(rule.accountId ?? 'ALL');
     setLookupAppliesTo(rule.appliesTo ?? 'uncategorized');
+    setLookupMatchField(rule.matchField ?? 'description');
     setLookupMatchMode(rule.matchMode ?? 'contains');
   };
 
@@ -160,6 +169,7 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
       targetCategory: existing?.targetCategory ?? '',
       accountId: lookupAccountId,
       appliesTo: lookupAppliesTo,
+      matchField: lookupMatchField,
       matchMode: lookupMatchMode,
       matchColumnHint: existing?.matchColumnHint,
       lastRun: existing?.lastRun,
@@ -640,19 +650,37 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="text-[11px] font-medium text-slate-400 block mb-1">Match mode</label>
-            <select
-              value={lookupMatchMode}
-              onChange={(e) => setLookupMatchMode(e.target.value as LookupMatchMode)}
-              className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-            >
-              {LOOKUP_MATCH_MODES.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] font-medium text-slate-400 block mb-1">Column</label>
+              <select
+                value={lookupMatchField}
+                onChange={(e) => setLookupMatchField(e.target.value as LookupMatchField)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              >
+                {LOOKUP_MATCH_FIELDS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-slate-500 mt-1">Transaction field to search</p>
+            </div>
+            <div>
+              <label className="text-[11px] font-medium text-slate-400 block mb-1">Matching logic</label>
+              <select
+                value={lookupMatchMode}
+                onChange={(e) => setLookupMatchMode(e.target.value as LookupMatchMode)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              >
+                {LOOKUP_MATCH_MODES.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-slate-500 mt-1">How the identifier is compared</p>
+            </div>
           </div>
 
           <button
@@ -741,6 +769,8 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
                     </div>
                     <div>
                       <span className="text-slate-500">Match:</span>{' '}
+                      {LOOKUP_MATCH_FIELDS.find((f) => f.value === (rule.matchField ?? 'description'))?.label}
+                      <span className="text-slate-600"> · </span>
                       {LOOKUP_MATCH_MODES.find((m) => m.value === (rule.matchMode ?? 'contains'))?.label}
                     </div>
                     {rule.targetCategory && (

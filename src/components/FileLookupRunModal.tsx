@@ -88,6 +88,10 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
 
   if (!isOpen || !rule) return null;
 
+  const fieldLabel = rule.matchField === 'date' ? 'Date' : 'Description';
+  const modeLabel =
+    rule.matchMode === 'equals' ? 'equals' : rule.matchMode === 'startsWith' ? 'starts with' : 'contains';
+
   const sortedCategories = Array.from(new Set(categories))
     .filter((c) => c && c !== 'Uncategorized')
     .sort((a, b) => a.localeCompare(b));
@@ -127,9 +131,10 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
           {step === 'upload' && (
             <>
               <p className="text-xs text-slate-400">
-                Upload a spreadsheet with an identifier column — its values are matched as a
-                substring of each transaction's description. The file's contents are used for this
-                run only; they are not saved.
+                Upload a spreadsheet with an identifier column — its values are matched against
+                each transaction's <span className="text-slate-300">{fieldLabel}</span>, which{' '}
+                <span className="text-slate-300">{modeLabel}</span> the identifier. The file's
+                contents are used for this run only; they are not saved.
               </p>
               <label className="block border-2 border-dashed border-slate-600 hover:border-indigo-500/60 bg-slate-800/40 rounded-xl p-8 text-center cursor-pointer transition-all">
                 <Upload className="w-8 h-8 text-indigo-400 mx-auto mb-3" />
@@ -176,7 +181,7 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
-                <p className="text-[10px] text-slate-500 mt-1">Matched as a substring of the description</p>
+                <p className="text-[10px] text-slate-500 mt-1">{fieldLabel} {modeLabel} the identifier</p>
               </div>
 
               <div>

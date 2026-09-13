@@ -51,6 +51,7 @@ export function parseImportedRules(text: string): Rule[] {
       operator: r.operator,
       value: r.value,
       // 'annotateFromFile' config — never the file's data, just the small recipe.
+      matchField: r.matchField === 'date' ? 'date' : action === 'annotateFromFile' ? 'description' : undefined,
       matchMode: r.matchMode === 'equals' || r.matchMode === 'startsWith' ? r.matchMode : action === 'annotateFromFile' ? 'contains' : undefined,
       matchColumnHint: typeof r.matchColumnHint === 'string' ? r.matchColumnHint : undefined,
       // lastRun is deliberately not imported — stats from a previous run/machine are stale.
