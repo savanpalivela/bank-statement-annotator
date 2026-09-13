@@ -713,47 +713,51 @@ export function App() {
 
   // ── Run a file-lookup rule ─────────────────────────────────────────────────
   // `lookupRows` comes straight from the file the user just picked in
-  // FileLookupRunModal — it is used for this single call only. Nothing from it
-  // is stored: only the resulting categories (already how every other
-  // categorization method persists) and two small column-name hints + summary
-  // counts on the rule itself.
+  // FileLookupRunModal — it is used for this single call only to read the
+  // identifier column. Nothing from it is stored: only the resulting
+  // categories (already how every other categorization method persists) and
+  // a column-name hint + the chosen category + summary counts on the rule.
   const handleRunFileLookupRule = (
     ruleId: string,
     lookupRows: Record<string, any>[],
     matchColumn: string,
-    categoryColumn: string,
+    category: string,
     overrideExisting: boolean
   ) => {
     const rule = rules.find((r) => r.id === ruleId);
     if (!rule || transactions.length === 0) return;
 
-    const { updatedTransactions, matched, usableRows, totalRows, collisions } = applyFileLookupRule(
+    const { updatedTransactions, matched, matchedIds, usableRows, totalRows } = applyFileLookupRule(
       transactions,
       rule,
       lookupRows,
       matchColumn,
-      categoryColumn,
+      category,
       overrideExisting
     );
+
+    if (category !== 'Uncategorized' && !allCategories.includes(category)) {
+      const idSet = new Set(matchedIds);
+      const matchedTx = transactions.filter((t) => idSet.has(t.id));
+      const anyIncome = matchedTx.some((t) => t.credit > 0 && t.debit === 0);
+      const anyExpense = matchedTx.some((t) => t.debit > 0);
+      const targetType: 'income' | 'expense' = anyIncome && !anyExpense ? 'income' : 'expense';
+      setCategories((prev) => ({ ...prev, [targetType]: [...prev[targetType], category] }));
+    }
+
     setTransactions(updatedTransactions);
     setRules((prev) =>
       prev.map((r) =>
         r.id === ruleId
-          ? {
-              ...r,
-              matchColumnHint: matchColumn,
-              categoryColumnHint: categoryColumn,
-              lastRun: { at: Date.now(), matched, totalRows: usableRows },
-            }
+          ? { ...r, matchColumnHint: matchColumn, targetCategory: category, lastRun: { at: Date.now(), matched, totalRows: usableRows } }
           : r
       )
     );
 
-    let msg = `"${rule.name}": ${usableRows} of ${totalRows} rows usable, categorized ${matched} transaction${matched === 1 ? '' : 's'}.`;
-    if (collisions > 0) {
-      msg += ` ${collisions} transaction${collisions === 1 ? '' : 's'} matched more than one row — first match used.`;
-    }
-    triggerNotification(msg, matched > 0 ? 'success' : 'info');
+    triggerNotification(
+      `"${rule.name}": ${usableRows} of ${totalRows} rows usable, categorized ${matched} transaction${matched === 1 ? '' : 's'} as "${category}".`,
+      matched > 0 ? 'success' : 'info'
+    );
   };
 
   // ── Export ────────────────────────────────────────────────────────────────

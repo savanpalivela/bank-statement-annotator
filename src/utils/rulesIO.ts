@@ -53,7 +53,6 @@ export function parseImportedRules(text: string): Rule[] {
       // 'annotateFromFile' config — never the file's data, just the small recipe.
       matchMode: r.matchMode === 'equals' || r.matchMode === 'startsWith' ? r.matchMode : action === 'annotateFromFile' ? 'contains' : undefined,
       matchColumnHint: typeof r.matchColumnHint === 'string' ? r.matchColumnHint : undefined,
-      categoryColumnHint: typeof r.categoryColumnHint === 'string' ? r.categoryColumnHint : undefined,
       // lastRun is deliberately not imported — stats from a previous run/machine are stale.
     } as Rule);
   });

@@ -29,7 +29,7 @@ interface RuleEngineSidebarProps {
     ruleId: string,
     lookupRows: Record<string, any>[],
     matchColumn: string,
-    categoryColumn: string,
+    category: string,
     overrideExisting: boolean
   ) => void;
   onExportRules: () => void;
@@ -150,18 +150,19 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
 
   const handleSubmitLookup = (e: React.FormEvent) => {
     e.preventDefault();
+    const existing = editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId) : undefined;
     const base: Rule = {
       id: editingLookupRuleId ?? `rule-lookup-${Date.now()}`,
       name: lookupName.trim() || 'File Lookup Rule',
-      enabled: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.enabled ?? true : true,
+      enabled: existing?.enabled ?? true,
       action: 'annotateFromFile',
-      targetCategory: '',
+      // Remembers the category last chosen at Run time — untouched by this form.
+      targetCategory: existing?.targetCategory ?? '',
       accountId: lookupAccountId,
       appliesTo: lookupAppliesTo,
       matchMode: lookupMatchMode,
-      matchColumnHint: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.matchColumnHint : undefined,
-      categoryColumnHint: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.categoryColumnHint : undefined,
-      lastRun: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.lastRun : undefined,
+      matchColumnHint: existing?.matchColumnHint,
+      lastRun: existing?.lastRun,
     };
     if (editingLookupRuleId) onUpdateRule(base);
     else onAddRule(base);
@@ -742,6 +743,12 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
                       <span className="text-slate-500">Match:</span>{' '}
                       {LOOKUP_MATCH_MODES.find((m) => m.value === (rule.matchMode ?? 'contains'))?.label}
                     </div>
+                    {rule.targetCategory && (
+                      <div>
+                        <span className="text-slate-500">Last assigned:</span>{' '}
+                        <span className="text-amber-300 font-medium">{rule.targetCategory}</span>
+                      </div>
+                    )}
                     <div className="italic text-slate-500">
                       {rule.lastRun
                         ? `Last run ${new Date(rule.lastRun.at).toLocaleString()} — categorized ${rule.lastRun.matched} transaction${rule.lastRun.matched === 1 ? '' : 's'}`
@@ -849,6 +856,7 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
       <FileLookupRunModal
         isOpen={!!runningLookupRule}
         rule={runningLookupRule}
+        categories={categories}
         onClose={() => setRunningLookupRule(null)}
         onRun={onRunFileLookupRule}
       />

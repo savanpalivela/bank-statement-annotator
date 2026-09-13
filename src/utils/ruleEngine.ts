@@ -25,10 +25,9 @@ export function normalizeRule(rule: Rule): Rule {
     appliesTo: rule.appliesTo ?? (action === 'exclude' ? 'all' : 'uncategorized'),
     accountId: rule.accountId ?? 'ALL',
     // 'annotateFromFile' rules only — carried through untouched so the mapper
-    // hints and last-run stats survive a normalize (localStorage load, export, etc).
+    // hint and last-run stats survive a normalize (localStorage load, export, etc).
     matchMode: rule.matchMode,
     matchColumnHint: rule.matchColumnHint,
-    categoryColumnHint: rule.categoryColumnHint,
     lastRun: rule.lastRun,
   };
 }
@@ -182,8 +181,9 @@ export function applyRulesToTransactions(
 
 // ── File-lookup rules ('annotateFromFile') ──────────────────────────────────
 // Unlike condition rules, these carry no persisted data — only a small config
-// (match mode, scope). The actual identifier→category pairs live only in memory
-// for the duration of one "Run" and are supplied fresh by the caller each time.
+// (match mode, scope). The identifier list lives only in memory for the
+// duration of one "Run" and is supplied fresh by the caller each time; the
+// category assigned is one of the app's own categories, chosen at run time.
 
 function matchDescription(description: string, value: string, mode: LookupMatchMode = 'contains'): boolean {
   const source = description.toLowerCase().trim();
@@ -201,51 +201,45 @@ function matchDescription(description: string, value: string, mode: LookupMatchM
 
 export interface FileLookupRunResult {
   updatedTransactions: Transaction[];
-  /** Transactions that received a category from this run */
+  /** Transactions that received the chosen category from this run */
   matched: number;
-  /** Rows in the file that had both an identifier and a category (the rest are skipped) */
+  /** ids of the matched transactions, so the caller can inspect them (e.g. to file a new category under income vs expense) */
+  matchedIds: string[];
+  /** Rows in the file that had a non-blank identifier (the rest are skipped) */
   usableRows: number;
   /** Total rows parsed from the file */
   totalRows: number;
-  /** Transactions whose description matched more than one row (first match wins) */
-  collisions: number;
 }
 
 /**
  * Apply one 'annotateFromFile' rule against freshly-parsed lookup rows. `lookupRows`
  * is never persisted — it's read from the uploaded file and passed in for this
- * call only; the rule itself only remembers which columns were used (as name
- * hints) and summary counts, via the caller updating `matchColumnHint` /
- * `categoryColumnHint` / `lastRun` on the Rule after this returns.
+ * call only; the rule itself only remembers which identifier column was used
+ * (as a name hint), the category last chosen (on `targetCategory`), and
+ * summary counts (`lastRun`), all set by the caller after this returns.
  */
 export function applyFileLookupRule(
   transactions: Transaction[],
   rule: Rule,
   lookupRows: Record<string, any>[],
   matchColumn: string,
-  categoryColumn: string,
+  category: string,
   overrideExisting: boolean = false
 ): FileLookupRunResult {
   const mode = rule.matchMode ?? 'contains';
-  const entries = lookupRows
-    .map((row) => ({
-      id: String(row[matchColumn] ?? '').trim(),
-      category: String(row[categoryColumn] ?? '').trim(),
-    }))
-    .filter((e) => e.id !== '' && e.category !== '');
+  const ids = lookupRows.map((row) => String(row[matchColumn] ?? '').trim()).filter((id) => id !== '');
 
   let matched = 0;
-  let collisions = 0;
+  const matchedIds: string[] = [];
   const updatedTransactions = transactions.map((tx) => {
     if (!ruleScopeMatches(rule, tx, overrideExisting)) return tx;
-    const hits = entries.filter((e) => matchDescription(tx.description, e.id, mode));
-    if (hits.length === 0) return tx;
-    if (hits.length > 1) collisions++;
+    if (!ids.some((id) => matchDescription(tx.description, id, mode))) return tx;
     matched++;
-    return { ...tx, category: hits[0].category };
+    matchedIds.push(tx.id);
+    return { ...tx, category };
   });
 
-  return { updatedTransactions, matched, usableRows: entries.length, totalRows: lookupRows.length, collisions };
+  return { updatedTransactions, matched, matchedIds, usableRows: ids.length, totalRows: lookupRows.length };
 }
 
 export const INITIAL_RULES: Rule[] = [

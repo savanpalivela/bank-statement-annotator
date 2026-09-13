@@ -7,16 +7,19 @@ interface FileLookupRunModalProps {
   isOpen: boolean;
   onClose: () => void;
   rule: Rule | null;
+  /** The app's full category list (used to populate the Category select — never the file's columns) */
+  categories: string[];
   onRun: (
     ruleId: string,
     lookupRows: Record<string, any>[],
     matchColumn: string,
-    categoryColumn: string,
+    category: string,
     overrideExisting: boolean
   ) => void;
 }
 
 type Step = 'upload' | 'map';
+const CUSTOM = '__custom__';
 
 function guessColumn(columns: string[], hint: string | undefined, keywords: string[]): string {
   if (hint && columns.includes(hint)) return hint;
@@ -26,11 +29,13 @@ function guessColumn(columns: string[], hint: string | undefined, keywords: stri
 }
 
 /**
- * Upload → map columns → run flow for an 'annotateFromFile' Smart Rule.
- * The parsed file rows live only in this component's state — closing the
- * modal (or a successful run) discards them; nothing here is persisted.
+ * Upload → map the identifier column → pick a category → run flow for an
+ * 'annotateFromFile' Smart Rule. The parsed file rows live only in this
+ * component's state — closing the modal (or a successful run) discards them.
+ * The category is one of the app's own categories (or a new custom one),
+ * never read from the uploaded file.
  */
-export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, onClose, rule, onRun }) => {
+export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, onClose, rule, categories, onRun }) => {
   const [step, setStep] = useState<Step>('upload');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -38,7 +43,8 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
   const [columns, setColumns] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, any>[]>([]);
   const [matchColumn, setMatchColumn] = useState('');
-  const [categoryColumn, setCategoryColumn] = useState('');
+  const [category, setCategory] = useState('Uncategorized');
+  const [customCategory, setCustomCategory] = useState('');
   const [overrideExisting, setOverrideExisting] = useState(false);
 
   const reset = () => {
@@ -49,7 +55,8 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
     setColumns([]);
     setRows([]);
     setMatchColumn('');
-    setCategoryColumn('');
+    setCategory('Uncategorized');
+    setCustomCategory('');
     setOverrideExisting(false);
   };
 
@@ -68,7 +75,9 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
       setColumns(parsed.columns);
       setRows(parsed.rows);
       setMatchColumn(guessColumn(parsed.columns, rule?.matchColumnHint, ['id', 'reference', 'ref no', 'txn']));
-      setCategoryColumn(guessColumn(parsed.columns, rule?.categoryColumnHint, ['categ', 'annotation', 'tag', 'label']));
+      if (rule?.targetCategory && categories.includes(rule.targetCategory)) {
+        setCategory(rule.targetCategory);
+      }
       setStep('map');
     } catch (err: any) {
       setError(err.message || 'Failed to read that file.');
@@ -79,15 +88,18 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
 
   if (!isOpen || !rule) return null;
 
-  const usableCount = rows.filter(
-    (r) => String(r[matchColumn] ?? '').trim() !== '' && String(r[categoryColumn] ?? '').trim() !== ''
-  ).length;
+  const sortedCategories = Array.from(new Set(categories))
+    .filter((c) => c && c !== 'Uncategorized')
+    .sort((a, b) => a.localeCompare(b));
 
-  const canRun = matchColumn !== '' && categoryColumn !== '' && usableCount > 0;
+  const usableCount = rows.filter((r) => String(r[matchColumn] ?? '').trim() !== '').length;
+  const resolvedCategory = category === CUSTOM ? customCategory.trim() : category;
+
+  const canRun = matchColumn !== '' && resolvedCategory !== '' && usableCount > 0;
 
   const handleConfirm = () => {
     if (!canRun) return;
-    onRun(rule.id, rows, matchColumn, categoryColumn, overrideExisting);
+    onRun(rule.id, rows, matchColumn, resolvedCategory, overrideExisting);
     handleClose();
   };
 
@@ -115,9 +127,9 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
           {step === 'upload' && (
             <>
               <p className="text-xs text-slate-400">
-                Upload a spreadsheet with an identifier column (matched as a substring of each
-                transaction's description) and a category column. The file's contents are used for
-                this run only — they are not saved.
+                Upload a spreadsheet with an identifier column — its values are matched as a
+                substring of each transaction's description. The file's contents are used for this
+                run only; they are not saved.
               </p>
               <label className="block border-2 border-dashed border-slate-600 hover:border-indigo-500/60 bg-slate-800/40 rounded-xl p-8 text-center cursor-pointer transition-all">
                 <Upload className="w-8 h-8 text-indigo-400 mx-auto mb-3" />
@@ -152,40 +164,51 @@ export const FileLookupRunModal: React.FC<FileLookupRunModalProps> = ({ isOpen, 
                 <span className="text-slate-200 font-medium">{fileName}</span> — {rows.length} row{rows.length === 1 ? '' : 's'} parsed
               </p>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] font-medium text-slate-400 block mb-1">Identifier column</label>
-                  <select
-                    value={matchColumn}
-                    onChange={(e) => setMatchColumn(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    <option value="">Select…</option>
-                    {columns.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                  <p className="text-[10px] text-slate-500 mt-1">Matched as a substring of the description</p>
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-slate-400 block mb-1">Category column</label>
-                  <select
-                    value={categoryColumn}
-                    onChange={(e) => setCategoryColumn(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                  >
-                    <option value="">Select…</option>
-                    {columns.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                  <p className="text-[10px] text-slate-500 mt-1">Assigned to each matching transaction</p>
-                </div>
+              <div>
+                <label className="text-[11px] font-medium text-slate-400 block mb-1">Identifier column</label>
+                <select
+                  value={matchColumn}
+                  onChange={(e) => setMatchColumn(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  <option value="">Select…</option>
+                  {columns.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 mt-1">Matched as a substring of the description</p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-medium text-slate-400 block mb-1">Category</label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  <option value="Uncategorized">Uncategorized</option>
+                  {sortedCategories.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                  <option value={CUSTOM}>✏️ Custom…</option>
+                </select>
+                {category === CUSTOM && (
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="New category name…"
+                    value={customCategory}
+                    onChange={(e) => setCustomCategory(e.target.value)}
+                    className="mt-1.5 w-full bg-slate-800 border border-indigo-500 text-slate-100 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
+                  />
+                )}
+                <p className="text-[10px] text-slate-500 mt-1">Assigned to every matching transaction, from the app's own category list</p>
               </div>
 
               <div className="text-[11px] text-slate-400 bg-slate-800/60 border border-slate-700/60 rounded-lg px-2.5 py-1.5">
                 <strong className={usableCount > 0 ? 'text-emerald-300' : 'text-slate-300'}>{usableCount}</strong>{' '}
-                of {rows.length} row{rows.length === 1 ? '' : 's'} have both an identifier and a category and will be used.
+                of {rows.length} row{rows.length === 1 ? '' : 's'} have an identifier and will be matched against
+                {' '}<span className="text-slate-300">{resolvedCategory || '…'}</span>.
               </div>
 
               <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">

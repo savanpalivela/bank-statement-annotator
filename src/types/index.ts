@@ -83,6 +83,7 @@ export interface Rule {
   id: string;
   name: string;
   enabled: boolean;
+  /** For 'annotateFromFile' rules this remembers the category last chosen at Run time (picked from the app's category list, not read from the file) */
   targetCategory: string;
   /** 'categorize' (default) sets the category; 'exclude' flags the transaction as an internal transfer */
   action?: RuleAction;
@@ -98,9 +99,8 @@ export interface Rule {
   // ---- 'annotateFromFile' rules only ----
   /** How the uploaded file's identifier column is matched against the description */
   matchMode?: LookupMatchMode;
-  /** Remembered column header names from the last run, to pre-fill the mapper next time — NOT the file's data */
+  /** Remembered identifier-column header name from the last run, to pre-fill the mapper — NOT the file's data */
   matchColumnHint?: string;
-  categoryColumnHint?: string;
   /** Stats from the most recent run — numbers only, never the source rows */
   lastRun?: { at: number; matched: number; totalRows: number };
 
