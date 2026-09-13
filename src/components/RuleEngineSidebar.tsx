@@ -3,13 +3,15 @@ import type {
   Account,
   ConditionField,
   ConditionOperator,
+  LookupMatchMode,
   Rule,
   RuleAppliesTo,
   RuleCondition,
   Transaction,
 } from '../types';
-import { Plus, Trash2, CheckCircle2, Play, AlertCircle, Pencil, Copy, Download, Upload } from 'lucide-react';
+import { Plus, Trash2, CheckCircle2, Play, AlertCircle, Pencil, Copy, Download, Upload, FileSearch, FileUp } from 'lucide-react';
 import { ruleMatchCount } from '../utils/ruleEngine';
+import { FileLookupRunModal } from './FileLookupRunModal';
 
 interface RuleEngineSidebarProps {
   rules: Rule[];
@@ -23,9 +25,22 @@ interface RuleEngineSidebarProps {
   onToggleRule: (id: string) => void;
   onRunRules: (overrideExisting: boolean) => void;
   onRunSingleRule: (id: string, overrideExisting: boolean) => void;
+  onRunFileLookupRule: (
+    ruleId: string,
+    lookupRows: Record<string, any>[],
+    matchColumn: string,
+    categoryColumn: string,
+    overrideExisting: boolean
+  ) => void;
   onExportRules: () => void;
   onImportRules: (text: string) => void;
 }
+
+const LOOKUP_MATCH_MODES: { value: LookupMatchMode; label: string }[] = [
+  { value: 'contains', label: 'Description contains the identifier' },
+  { value: 'equals', label: 'Description equals the identifier' },
+  { value: 'startsWith', label: 'Description starts with the identifier' },
+];
 
 const TEXT_OPERATORS: { value: ConditionOperator; label: string }[] = [
   { value: 'contains', label: 'Contains' },
@@ -88,6 +103,7 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
   onToggleRule,
   onRunRules,
   onRunSingleRule,
+  onRunFileLookupRule,
   onExportRules,
   onImportRules,
 }) => {
@@ -95,6 +111,62 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [overrideExisting, setOverrideExisting] = useState(true);
   const importInputRef = useRef<HTMLInputElement>(null);
+
+  // ── File-lookup rule form (separate from the condition-rule form above —
+  // it has no conditions and no fixed target category) ─────────────────────
+  const [showAddLookupForm, setShowAddLookupForm] = useState(false);
+  const [editingLookupRuleId, setEditingLookupRuleId] = useState<string | null>(null);
+  const [lookupName, setLookupName] = useState('');
+  const [lookupAccountId, setLookupAccountId] = useState('ALL');
+  const [lookupAppliesTo, setLookupAppliesTo] = useState<RuleAppliesTo>('uncategorized');
+  const [lookupMatchMode, setLookupMatchMode] = useState<LookupMatchMode>('contains');
+  const [runningLookupRule, setRunningLookupRule] = useState<Rule | null>(null);
+
+  const resetLookupForm = () => {
+    setLookupName('');
+    setLookupAccountId('ALL');
+    setLookupAppliesTo('uncategorized');
+    setLookupMatchMode('contains');
+    setShowAddLookupForm(false);
+    setEditingLookupRuleId(null);
+  };
+
+  const handleOpenAddLookupForm = () => {
+    resetForm();
+    resetLookupForm();
+    setShowAddLookupForm(true);
+  };
+
+  const handleOpenEditLookupForm = (rule: Rule) => {
+    setShowAddForm(false);
+    setEditingRuleId(null);
+    setShowAddLookupForm(false);
+    setEditingLookupRuleId(rule.id);
+    setLookupName(rule.name);
+    setLookupAccountId(rule.accountId ?? 'ALL');
+    setLookupAppliesTo(rule.appliesTo ?? 'uncategorized');
+    setLookupMatchMode(rule.matchMode ?? 'contains');
+  };
+
+  const handleSubmitLookup = (e: React.FormEvent) => {
+    e.preventDefault();
+    const base: Rule = {
+      id: editingLookupRuleId ?? `rule-lookup-${Date.now()}`,
+      name: lookupName.trim() || 'File Lookup Rule',
+      enabled: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.enabled ?? true : true,
+      action: 'annotateFromFile',
+      targetCategory: '',
+      accountId: lookupAccountId,
+      appliesTo: lookupAppliesTo,
+      matchMode: lookupMatchMode,
+      matchColumnHint: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.matchColumnHint : undefined,
+      categoryColumnHint: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.categoryColumnHint : undefined,
+      lastRun: editingLookupRuleId ? rules.find((r) => r.id === editingLookupRuleId)?.lastRun : undefined,
+    };
+    if (editingLookupRuleId) onUpdateRule(base);
+    else onAddRule(base);
+    resetLookupForm();
+  };
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -132,14 +204,19 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
 
   const handleOpenAddForm = () => {
     resetForm();
+    resetLookupForm();
     setShowAddForm(true);
   };
 
   const handleOpenEditForm = (rule: Rule) => {
+    setShowAddLookupForm(false);
+    setEditingLookupRuleId(null);
     setShowAddForm(false);
     setEditingRuleId(rule.id);
     setName(rule.name);
-    const act = rule.action ?? 'categorize';
+    // This form only ever handles 'categorize' / 'exclude' rules (file-lookup
+    // rules open handleOpenEditLookupForm instead) — collapse defensively.
+    const act: 'categorize' | 'exclude' = rule.action === 'exclude' ? 'exclude' : 'categorize';
     setAction(act);
     setAccountId(rule.accountId ?? 'ALL');
     setAppliesTo(rule.appliesTo ?? (act === 'exclude' ? 'all' : 'uncategorized'));
@@ -242,9 +319,16 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
         <button
           onClick={handleOpenAddForm}
           className="p-1.5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 rounded-lg border border-indigo-500/30 transition-colors"
-          title="Add New Rule"
+          title="Add condition-based rule"
         >
           <Plus className="w-4 h-4" />
+        </button>
+        <button
+          onClick={handleOpenAddLookupForm}
+          className="p-1.5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 rounded-lg border border-indigo-500/30 transition-colors"
+          title="Add file-lookup rule"
+        >
+          <FileSearch className="w-4 h-4" />
         </button>
       </div>
 
@@ -496,6 +580,89 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
         </form>
       )}
 
+      {/* Add/Edit File-Lookup Rule Form */}
+      {(showAddLookupForm || editingLookupRuleId) && (
+        <form onSubmit={handleSubmitLookup} className="bg-slate-900/90 border border-indigo-500/40 rounded-xl p-3.5 mb-4 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-indigo-300">
+              {editingLookupRuleId ? '✏️ Edit File-Lookup Rule' : '📄 Create File-Lookup Rule'}
+            </span>
+            <button type="button" onClick={resetLookupForm} className="text-xs text-slate-400 hover:text-white">
+              Cancel
+            </button>
+          </div>
+
+          <p className="text-[11px] text-slate-500">
+            This rule doesn't store any data itself — each time you click{' '}
+            <span className="text-slate-300">Run</span> on it, you upload a file and it annotates
+            transactions from that file's rows, live.
+          </p>
+
+          <div>
+            <label className="text-[11px] font-medium text-slate-400 block mb-1">Rule Name</label>
+            <input
+              type="text"
+              placeholder="e.g. Settlement ID Lookup"
+              value={lookupName}
+              onChange={(e) => setLookupName(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] font-medium text-slate-400 block mb-1">Account</label>
+              <select
+                value={lookupAccountId}
+                onChange={(e) => setLookupAccountId(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              >
+                <option value="ALL">All accounts</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-medium text-slate-400 block mb-1">Applies to</label>
+              <select
+                value={lookupAppliesTo}
+                onChange={(e) => setLookupAppliesTo(e.target.value as RuleAppliesTo)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              >
+                <option value="uncategorized">Uncategorized only</option>
+                <option value="all">All transactions</option>
+                <option value="categorized">Categorized only</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-medium text-slate-400 block mb-1">Match mode</label>
+            <select
+              value={lookupMatchMode}
+              onChange={(e) => setLookupMatchMode(e.target.value as LookupMatchMode)}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            >
+              {LOOKUP_MATCH_MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="submit"
+            className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow"
+          >
+            {editingLookupRuleId ? 'Update Rule' : 'Save Rule'}
+          </button>
+        </form>
+      )}
+
       {/* Rules List */}
       <div className="space-y-2">
         {rules.length === 0 ? (
@@ -505,6 +672,86 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
           </div>
         ) : (
           rules.map((rule) => {
+            if ((rule.action ?? 'categorize') === 'annotateFromFile') {
+              return (
+                <div
+                  key={rule.id}
+                  className={`p-3 rounded-xl border transition-all ${
+                    editingLookupRuleId === rule.id
+                      ? 'bg-indigo-950/50 border-indigo-500 ring-1 ring-indigo-500'
+                      : rule.enabled
+                      ? 'bg-slate-900/60 border-slate-700/80 hover:border-slate-600'
+                      : 'bg-slate-900/20 border-slate-800 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onToggleRule(rule.id)}
+                        className={`p-0.5 rounded transition-colors ${
+                          rule.enabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-slate-600 hover:text-slate-400'
+                        }`}
+                        title={rule.enabled ? 'Disable rule' : 'Enable rule'}
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                      </button>
+                      <span className="text-xs font-semibold text-slate-200">{rule.name}</span>
+                      <span className="text-[9px] uppercase tracking-wider text-indigo-300 bg-indigo-500/20 px-1.5 py-0.5 rounded-full">
+                        File lookup
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setRunningLookupRule(rule)}
+                        className="text-slate-400 hover:text-emerald-300 p-1 transition-colors"
+                        title="Upload a file and run this rule"
+                      >
+                        <FileUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleOpenEditLookupForm(rule)}
+                        className="text-slate-400 hover:text-indigo-300 p-1 transition-colors"
+                        title="Edit Rule"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => onDuplicateRule(rule.id)}
+                        className="text-slate-400 hover:text-indigo-300 p-1 transition-colors"
+                        title="Duplicate Rule"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => onDeleteRule(rule.id)}
+                        className="text-slate-500 hover:text-rose-400 p-1 transition-colors"
+                        title="Delete Rule"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 text-[11px] text-slate-400 space-y-0.5">
+                    <div>
+                      <span className="text-slate-500">Scope:</span> {accountLabel(rule.accountId)}
+                      <span className="text-slate-600"> · {rule.appliesTo ?? 'uncategorized'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Match:</span>{' '}
+                      {LOOKUP_MATCH_MODES.find((m) => m.value === (rule.matchMode ?? 'contains'))?.label}
+                    </div>
+                    <div className="italic text-slate-500">
+                      {rule.lastRun
+                        ? `Last run ${new Date(rule.lastRun.at).toLocaleString()} — categorized ${rule.lastRun.matched} transaction${rule.lastRun.matched === 1 ? '' : 's'}`
+                        : 'Not run yet — click the upload icon to run it against a file'}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
             const conds = rule.conditions ?? (rule.field && rule.operator ? [{ field: rule.field, operator: rule.operator, value: rule.value ?? '' } as RuleCondition] : []);
             const isExclude = (rule.action ?? 'categorize') === 'exclude';
             return (
@@ -598,6 +845,13 @@ export const RuleEngineSidebar: React.FC<RuleEngineSidebarProps> = ({
           })
         )}
       </div>
+
+      <FileLookupRunModal
+        isOpen={!!runningLookupRule}
+        rule={runningLookupRule}
+        onClose={() => setRunningLookupRule(null)}
+        onRun={onRunFileLookupRule}
+      />
     </div>
   );
 };

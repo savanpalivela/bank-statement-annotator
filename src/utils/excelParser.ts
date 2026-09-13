@@ -114,6 +114,23 @@ export async function parseExcelFileAsNewAccount(file: File): Promise<ParseExcel
   return parseExcelFile(file);
 }
 
+export interface LookupFileResult {
+  fileName: string;
+  columns: string[];
+  rows: Record<string, any>[];
+}
+
+/**
+ * Parse a file as a generic lookup/reference sheet (e.g. "Transaction id" +
+ * "Category" columns) — no statement-shaped column mapping is inferred or
+ * required. Used only transiently by a file-lookup Smart Rule's "Run" flow;
+ * the returned rows are never persisted.
+ */
+export async function parseLookupFile(file: File): Promise<LookupFileResult> {
+  const parsed = await parseExcelFile(file);
+  return { fileName: parsed.fileName, columns: parsed.columns, rows: parsed.rawData };
+}
+
 export function detectColumnMapping(columns: string[]): ColumnMapping {
   const mapping: ColumnMapping = {
     dateCol: '',

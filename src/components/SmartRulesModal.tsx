@@ -17,6 +17,13 @@ interface SmartRulesModalProps {
   onToggleRule: (id: string) => void;
   onRunRules: (overrideExisting: boolean) => void;
   onRunSingleRule: (id: string, overrideExisting: boolean) => void;
+  onRunFileLookupRule: (
+    ruleId: string,
+    lookupRows: Record<string, any>[],
+    matchColumn: string,
+    categoryColumn: string,
+    overrideExisting: boolean
+  ) => void;
   onExportRules: () => void;
   onImportRules: (text: string) => void;
 }
@@ -35,6 +42,7 @@ export const SmartRulesModal: React.FC<SmartRulesModalProps> = ({
   onToggleRule,
   onRunRules,
   onRunSingleRule,
+  onRunFileLookupRule,
   onExportRules,
   onImportRules,
 }) => {
@@ -104,6 +112,7 @@ export const SmartRulesModal: React.FC<SmartRulesModalProps> = ({
               onClose();
             }}
             onRunSingleRule={onRunSingleRule}
+            onRunFileLookupRule={onRunFileLookupRule}
           />
         </div>
       </div>

@@ -36,12 +36,13 @@ export function parseImportedRules(text: string): Rule[] {
 
   return arr.map((r: any, i: number): Rule => {
     if (!r || typeof r !== 'object') throw new Error(`Rule ${i + 1} is not an object`);
+    const action = r.action === 'exclude' ? 'exclude' : r.action === 'annotateFromFile' ? 'annotateFromFile' : 'categorize';
     return normalizeRule({
       id: typeof r.id === 'string' && r.id ? r.id : `imp-${i}`,
       name: typeof r.name === 'string' && r.name ? r.name : `Imported rule ${i + 1}`,
       enabled: r.enabled !== false,
       targetCategory: typeof r.targetCategory === 'string' ? r.targetCategory : 'Uncategorized',
-      action: r.action === 'exclude' ? 'exclude' : 'categorize',
+      action,
       match: r.match === 'any' ? 'any' : 'all',
       conditions: Array.isArray(r.conditions) ? r.conditions : undefined,
       accountId: typeof r.accountId === 'string' ? r.accountId : 'ALL',
@@ -49,6 +50,11 @@ export function parseImportedRules(text: string): Rule[] {
       field: r.field,
       operator: r.operator,
       value: r.value,
+      // 'annotateFromFile' config — never the file's data, just the small recipe.
+      matchMode: r.matchMode === 'equals' || r.matchMode === 'startsWith' ? r.matchMode : action === 'annotateFromFile' ? 'contains' : undefined,
+      matchColumnHint: typeof r.matchColumnHint === 'string' ? r.matchColumnHint : undefined,
+      categoryColumnHint: typeof r.categoryColumnHint === 'string' ? r.categoryColumnHint : undefined,
+      // lastRun is deliberately not imported — stats from a previous run/machine are stale.
     } as Rule);
   });
 }

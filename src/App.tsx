@@ -19,7 +19,7 @@ import {
 } from './utils/sampleData';
 import { parseExcelFileAsNewAccount, exportTransactionsToExcel } from './utils/excelParser';
 import type { MultiFileParseResult } from './utils/excelParser';
-import { INITIAL_RULES, applyRulesToTransactions, normalizeRules } from './utils/ruleEngine';
+import { INITIAL_RULES, applyFileLookupRule, applyRulesToTransactions, normalizeRules } from './utils/ruleEngine';
 import { exportRulesToFile, parseImportedRules } from './utils/rulesIO';
 import { exportCategoriesToFile, parseImportedCategories } from './utils/categoriesIO';
 import { SessionsModal } from './components/SessionsModal';
@@ -711,6 +711,51 @@ export function App() {
     triggerNotification(`Rule "${rule.name}" applied to ${matchesCount} transaction${matchesCount === 1 ? '' : 's'}.`);
   };
 
+  // ── Run a file-lookup rule ─────────────────────────────────────────────────
+  // `lookupRows` comes straight from the file the user just picked in
+  // FileLookupRunModal — it is used for this single call only. Nothing from it
+  // is stored: only the resulting categories (already how every other
+  // categorization method persists) and two small column-name hints + summary
+  // counts on the rule itself.
+  const handleRunFileLookupRule = (
+    ruleId: string,
+    lookupRows: Record<string, any>[],
+    matchColumn: string,
+    categoryColumn: string,
+    overrideExisting: boolean
+  ) => {
+    const rule = rules.find((r) => r.id === ruleId);
+    if (!rule || transactions.length === 0) return;
+
+    const { updatedTransactions, matched, usableRows, totalRows, collisions } = applyFileLookupRule(
+      transactions,
+      rule,
+      lookupRows,
+      matchColumn,
+      categoryColumn,
+      overrideExisting
+    );
+    setTransactions(updatedTransactions);
+    setRules((prev) =>
+      prev.map((r) =>
+        r.id === ruleId
+          ? {
+              ...r,
+              matchColumnHint: matchColumn,
+              categoryColumnHint: categoryColumn,
+              lastRun: { at: Date.now(), matched, totalRows: usableRows },
+            }
+          : r
+      )
+    );
+
+    let msg = `"${rule.name}": ${usableRows} of ${totalRows} rows usable, categorized ${matched} transaction${matched === 1 ? '' : 's'}.`;
+    if (collisions > 0) {
+      msg += ` ${collisions} transaction${collisions === 1 ? '' : 's'} matched more than one row — first match used.`;
+    }
+    triggerNotification(msg, matched > 0 ? 'success' : 'info');
+  };
+
   // ── Export ────────────────────────────────────────────────────────────────
   const handleExport = () => {
     if (transactions.length === 0) return;
@@ -1004,6 +1049,7 @@ export function App() {
         onToggleRule={handleToggleRule}
         onRunRules={handleRunRules}
         onRunSingleRule={handleRunSingleRule}
+        onRunFileLookupRule={handleRunFileLookupRule}
         onExportRules={handleExportRules}
         onImportRules={handleImportRules}
       />

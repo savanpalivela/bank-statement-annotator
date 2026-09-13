@@ -1,4 +1,4 @@
-import type { Rule, RuleCondition, Transaction } from '../types';
+import type { LookupMatchMode, Rule, RuleCondition, Transaction } from '../types';
 
 // ── Rule normalisation ──────────────────────────────────────────────────────
 /**
@@ -24,6 +24,12 @@ export function normalizeRule(rule: Rule): Rule {
     match: rule.match ?? 'all',
     appliesTo: rule.appliesTo ?? (action === 'exclude' ? 'all' : 'uncategorized'),
     accountId: rule.accountId ?? 'ALL',
+    // 'annotateFromFile' rules only — carried through untouched so the mapper
+    // hints and last-run stats survive a normalize (localStorage load, export, etc).
+    matchMode: rule.matchMode,
+    matchColumnHint: rule.matchColumnHint,
+    categoryColumnHint: rule.categoryColumnHint,
+    lastRun: rule.lastRun,
   };
 }
 
@@ -102,7 +108,8 @@ export function evaluateCondition(cond: RuleCondition, tx: Transaction): boolean
 }
 
 // ── Rule matching ───────────────────────────────────────────────────────────
-export function ruleMatches(rule: Rule, tx: Transaction, overrideExisting = false): boolean {
+/** Account + applies-to scope check, shared by condition rules and file-lookup rules. */
+export function ruleScopeMatches(rule: Rule, tx: Transaction, overrideExisting = false): boolean {
   const norm = normalizeRule(rule);
 
   // scope: account
@@ -115,7 +122,13 @@ export function ruleMatches(rule: Rule, tx: Transaction, overrideExisting = fals
   if (appliesTo === 'uncategorized' && isCategorized) return false;
   if (appliesTo === 'categorized' && !isCategorized) return false;
 
-  // conditions
+  return true;
+}
+
+export function ruleMatches(rule: Rule, tx: Transaction, overrideExisting = false): boolean {
+  if (!ruleScopeMatches(rule, tx, overrideExisting)) return false;
+
+  const norm = normalizeRule(rule);
   const conds = norm.conditions ?? [];
   if (conds.length === 0) return true;
   return (norm.match ?? 'all') === 'any'
@@ -135,9 +148,12 @@ export function applyRulesToTransactions(
 ): { updatedTransactions: Transaction[]; matchesCount: number } {
   let matchesCount = 0;
 
-  // Active rules, with condition-bearing rules evaluated before catch-all rules
+  // Active rules, with condition-bearing rules evaluated before catch-all rules.
+  // 'annotateFromFile' rules are excluded: they carry no conditions and no fixed
+  // target category (the category comes per-row from an uploaded file at Run time),
+  // so they must never be evaluated by this generic condition-matching loop.
   const activeRules = rules
-    .filter((r) => r.enabled)
+    .filter((r) => r.enabled && (r.action ?? 'categorize') !== 'annotateFromFile')
     .map(normalizeRule)
     .sort((a, b) => {
       const ac = (a.conditions ?? []).length === 0 ? 1 : 0;
@@ -162,6 +178,74 @@ export function applyRulesToTransactions(
   });
 
   return { updatedTransactions, matchesCount };
+}
+
+// ── File-lookup rules ('annotateFromFile') ──────────────────────────────────
+// Unlike condition rules, these carry no persisted data — only a small config
+// (match mode, scope). The actual identifier→category pairs live only in memory
+// for the duration of one "Run" and are supplied fresh by the caller each time.
+
+function matchDescription(description: string, value: string, mode: LookupMatchMode = 'contains'): boolean {
+  const source = description.toLowerCase().trim();
+  const target = value.toLowerCase().trim();
+  if (!target) return false;
+  switch (mode) {
+    case 'equals':
+      return source === target;
+    case 'startsWith':
+      return source.startsWith(target);
+    default:
+      return source.includes(target);
+  }
+}
+
+export interface FileLookupRunResult {
+  updatedTransactions: Transaction[];
+  /** Transactions that received a category from this run */
+  matched: number;
+  /** Rows in the file that had both an identifier and a category (the rest are skipped) */
+  usableRows: number;
+  /** Total rows parsed from the file */
+  totalRows: number;
+  /** Transactions whose description matched more than one row (first match wins) */
+  collisions: number;
+}
+
+/**
+ * Apply one 'annotateFromFile' rule against freshly-parsed lookup rows. `lookupRows`
+ * is never persisted — it's read from the uploaded file and passed in for this
+ * call only; the rule itself only remembers which columns were used (as name
+ * hints) and summary counts, via the caller updating `matchColumnHint` /
+ * `categoryColumnHint` / `lastRun` on the Rule after this returns.
+ */
+export function applyFileLookupRule(
+  transactions: Transaction[],
+  rule: Rule,
+  lookupRows: Record<string, any>[],
+  matchColumn: string,
+  categoryColumn: string,
+  overrideExisting: boolean = false
+): FileLookupRunResult {
+  const mode = rule.matchMode ?? 'contains';
+  const entries = lookupRows
+    .map((row) => ({
+      id: String(row[matchColumn] ?? '').trim(),
+      category: String(row[categoryColumn] ?? '').trim(),
+    }))
+    .filter((e) => e.id !== '' && e.category !== '');
+
+  let matched = 0;
+  let collisions = 0;
+  const updatedTransactions = transactions.map((tx) => {
+    if (!ruleScopeMatches(rule, tx, overrideExisting)) return tx;
+    const hits = entries.filter((e) => matchDescription(tx.description, e.id, mode));
+    if (hits.length === 0) return tx;
+    if (hits.length > 1) collisions++;
+    matched++;
+    return { ...tx, category: hits[0].category };
+  });
+
+  return { updatedTransactions, matched, usableRows: entries.length, totalRows: lookupRows.length, collisions };
 }
 
 export const INITIAL_RULES: Rule[] = [

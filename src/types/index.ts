@@ -43,7 +43,10 @@ export interface ColumnMapping {
   categoryCol: string;
 }
 
-export type RuleAction = 'categorize' | 'exclude';
+export type RuleAction = 'categorize' | 'exclude' | 'annotateFromFile';
+
+/** How a file-lookup rule's identifier column is compared against the description */
+export type LookupMatchMode = 'contains' | 'equals' | 'startsWith';
 
 export type ConditionField = 'description' | 'amount' | 'date';
 
@@ -91,6 +94,15 @@ export interface Rule {
   accountId?: string;
   /** default 'uncategorized' for categorize rules, 'all' for exclude rules */
   appliesTo?: RuleAppliesTo;
+
+  // ---- 'annotateFromFile' rules only ----
+  /** How the uploaded file's identifier column is matched against the description */
+  matchMode?: LookupMatchMode;
+  /** Remembered column header names from the last run, to pre-fill the mapper next time — NOT the file's data */
+  matchColumnHint?: string;
+  categoryColumnHint?: string;
+  /** Stats from the most recent run — numbers only, never the source rows */
+  lastRun?: { at: number; matched: number; totalRows: number };
 
   // ---- legacy single-condition shape (auto-migrated by normalizeRule) ----
   field?: ConditionField;
