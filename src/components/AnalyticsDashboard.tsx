@@ -420,6 +420,8 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
                         color: '#f8fafc',
                         fontSize: '12px',
                       }}
+                      itemStyle={{ color: '#f8fafc' }}
+                      labelStyle={{ color: '#f8fafc' }}
                     />
                     <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
                       {rankedRows.map((d) => (
