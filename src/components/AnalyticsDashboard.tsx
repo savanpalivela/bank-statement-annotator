@@ -15,6 +15,8 @@ import {
 
 interface AnalyticsDashboardProps {
   summary: SummaryData;
+  /** Clicking a category bar (or table row) jumps to the Transactions tab filtered to it. */
+  onCategoryClick?: (category: string, type: 'income' | 'expense') => void;
 }
 
 /** Segments shown in the share bar before the rest collapse into "Other". */
@@ -42,7 +44,7 @@ const toSortedRows = (totals: Record<string, number> | undefined): CatRow[] =>
     .map(([name, value]) => ({ name, value: parseFloat(value.toFixed(2)) }))
     .sort((a, b) => b.value - a.value);
 
-const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summary }) => {
+const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summary, onCategoryClick }) => {
   const [activeTab, setActiveTab] = useState<'expense' | 'income'>('expense');
   const [view, setView] = useState<'chart' | 'table'>('chart');
   const [showAll, setShowAll] = useState(false);
@@ -283,7 +285,11 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
                 </thead>
                 <tbody className="divide-y divide-slate-800">
                   {tableRows.map((r, i) => (
-                    <tr key={r.name} className="hover:bg-slate-800/40">
+                    <tr
+                      key={r.name}
+                      onClick={() => onCategoryClick?.(r.name, activeTab)}
+                      className={`hover:bg-slate-800/40 ${onCategoryClick ? 'cursor-pointer' : ''}`}
+                    >
                       <td className="py-2 px-3">
                         <span className="flex items-center gap-2 min-w-0">
                           <span
@@ -425,7 +431,12 @@ const AnalyticsDashboardComponent: React.FC<AnalyticsDashboardProps> = ({ summar
                     />
                     <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
                       {rankedRows.map((d) => (
-                        <Cell key={d.name} fill={lerpRamp(barRamp, 1 - d.value / rankedMax)} />
+                        <Cell
+                          key={d.name}
+                          fill={lerpRamp(barRamp, 1 - d.value / rankedMax)}
+                          onClick={() => onCategoryClick?.(d.name, activeTab)}
+                          style={{ cursor: onCategoryClick ? 'pointer' : undefined }}
+                        />
                       ))}
                       <LabelList
                         dataKey="value"

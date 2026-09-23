@@ -83,6 +83,13 @@ export function App() {
     try { localStorage.setItem(LOCAL_STORAGE_VIEW_KEY, activeView); } catch {}
   }, [activeView]);
 
+  // ── Filter carried from a Dashboard category-bar click into the Transactions tab ──
+  const [pendingCategoryFilter, setPendingCategoryFilter] = useState<{ category: string; type: 'income' | 'expense' } | null>(null);
+  const handleCategoryBarClick = (category: string, type: 'income' | 'expense') => {
+    setPendingCategoryFilter({ category, type });
+    setActiveView('transactions');
+  };
+
   // ── Named session tracking ────────────────────────────────────────────────
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentSessionName, setCurrentSessionName] = useState<string | null>(null);
@@ -1101,9 +1108,11 @@ export function App() {
                 onToggleExclude={handleToggleExclude}
                 onUpdateNote={handleUpdateNote}
                 multiAccount={accounts.length > 1}
+                initialCategoryFilter={pendingCategoryFilter?.category}
+                initialTypeFilter={pendingCategoryFilter?.type}
               />
             ) : (
-              <AnalyticsDashboard summary={summaryData} />
+              <AnalyticsDashboard summary={summaryData} onCategoryClick={handleCategoryBarClick} />
             )}
           </>
         )}

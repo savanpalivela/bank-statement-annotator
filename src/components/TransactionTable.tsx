@@ -26,6 +26,9 @@ interface TransactionTableProps {
   onUpdateNote: (id: string, note: string) => void;
   /** Show the per-row Account column (true when more than one account is loaded) */
   multiAccount: boolean;
+  /** Pre-applied when this table first mounts (e.g. arriving from a Dashboard category-bar click) */
+  initialCategoryFilter?: string;
+  initialTypeFilter?: 'income' | 'expense';
 }
 
 export const TransactionTable: React.FC<TransactionTableProps> = ({
@@ -39,6 +42,8 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
   onToggleExclude,
   onUpdateNote,
   multiAccount,
+  initialCategoryFilter,
+  initialTypeFilter,
 }) => {
   const [renamingAccountId, setRenamingAccountId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -46,8 +51,8 @@ export const TransactionTable: React.FC<TransactionTableProps> = ({
   const [bulkCategory, setBulkCategory] = useState('Uncategorized');
   const [bulkCustom, setBulkCustom] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
-  const [typeFilter, setTypeFilter] = useState<'ALL' | 'income' | 'expense'>('ALL');
+  const [categoryFilter, setCategoryFilter] = useState<string>(initialCategoryFilter ?? 'ALL');
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'income' | 'expense'>(initialTypeFilter ?? 'ALL');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [editingId, setEditingId] = useState<string | null>(null);
