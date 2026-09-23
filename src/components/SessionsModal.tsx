@@ -3,6 +3,7 @@ import { X, Save, Layers } from 'lucide-react';
 import type { SessionSummary } from '../utils/sessionStore';
 import { listSessions } from '../utils/sessionStore';
 import { SessionTimeline } from './SessionTimeline';
+import { MonthYearNavigator } from './MonthYearNavigator';
 
 interface SessionsModalProps {
   isOpen: boolean;
@@ -16,6 +17,7 @@ interface SessionsModalProps {
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, name: string) => void;
+  onCreateForPeriod: (year: number, month: number) => void;
 }
 
 export const SessionsModal: React.FC<SessionsModalProps> = ({
@@ -29,6 +31,7 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
   onLoad,
   onDelete,
   onRename,
+  onCreateForPeriod,
 }) => {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [name, setName] = useState('');
@@ -132,6 +135,17 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
               <p className="text-xs text-slate-500 italic">Load some statements first, then you can save the session.</p>
             )}
           </div>
+
+          {/* Jump to any Month/Year — including ones with no session yet — and start one */}
+          <MonthYearNavigator
+            sessions={sessions}
+            onLoad={(id) => {
+              onLoad(id);
+            }}
+            onCreateSession={(year, month) => {
+              onCreateForPeriod(year, month);
+            }}
+          />
 
           {/* Timeline of saved statement annotations, grouped by Month/Year */}
           <div className="space-y-2">

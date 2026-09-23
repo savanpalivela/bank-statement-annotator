@@ -61,6 +61,16 @@ export function computeSessionPeriod(transactions: { date: string }[]): SessionP
   return { label, sortKey };
 }
 
+/** The period for an arbitrary, possibly-empty calendar month (0-indexed). Used to tag a
+ *  new blank session before any statement has been uploaded for it. */
+export function periodForMonth(year: number, month: number): SessionPeriod {
+  const d = new Date(year, month, 1);
+  return {
+    label: d.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
+    sortKey: `${year}-${String(month + 1).padStart(2, '0')}`,
+  };
+}
+
 /** Fallback period for sessions saved before periodLabel/periodSortKey existed. */
 function periodFromSavedAt(savedAt: number): SessionPeriod {
   const d = new Date(savedAt);

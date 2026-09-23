@@ -24,7 +24,7 @@ import { exportRulesToFile, parseImportedRules } from './utils/rulesIO';
 import { exportCategoriesToFile, parseImportedCategories } from './utils/categoriesIO';
 import { SessionsModal } from './components/SessionsModal';
 import { AccountsBar } from './components/AccountsBar';
-import { getSession, upsertSession, deleteSession, renameSession, computeSessionPeriod } from './utils/sessionStore';
+import { getSession, upsertSession, deleteSession, renameSession, computeSessionPeriod, periodForMonth } from './utils/sessionStore';
 import { getAllNotes, putNote, bulkPutNotes, noteKey } from './utils/notesStore';
 import type { SavedSession, SessionData } from './utils/sessionStore';
 import { CheckCircle, AlertCircle, Files, AlertTriangle, PlusCircle, X, Layers, LayoutDashboard, Table2 } from 'lucide-react';
@@ -404,6 +404,44 @@ export function App() {
   const handleRenameSession = (id: string, name: string) => {
     renameSession(id, name);
     if (id === currentSessionId) setCurrentSessionName(name);
+  };
+
+  /** Start a blank session tagged for a chosen calendar month, before any statement is uploaded. */
+  const handleCreateSessionForPeriod = (year: number, month: number) => {
+    if (
+      transactions.length > 0 &&
+      !window.confirm('Start a new blank session for this month? This clears the statements currently open here (save them first if you want to keep them).')
+    ) {
+      return;
+    }
+    const period = periodForMonth(year, month);
+    const id = `sess-${Date.now()}`;
+    const session: SavedSession = {
+      id,
+      name: period.label,
+      savedAt: Date.now(),
+      accountCount: 0,
+      txCount: 0,
+      annotatedCount: 0,
+      periodLabel: period.label,
+      periodSortKey: period.sortKey,
+      data: { accounts: [], transactions: [], isUsingSample: false, rejectedFilesList: [] },
+    };
+    try {
+      upsertSession(session);
+    } catch {
+      triggerNotification('Could not create session — browser storage is full. Delete an old session and retry.', 'info');
+      return;
+    }
+    rawDataMapRef.current.clear();
+    setAccounts([]);
+    setTransactions([]);
+    setIsUsingSample(false);
+    setRejectedFilesList([]);
+    setCurrentSessionId(id);
+    setCurrentSessionName(period.label);
+    setIsSessionsOpen(false);
+    triggerNotification(`Created session "${period.label}". Upload statements to fill it in.`);
   };
 
   // ── Demo Sample ───────────────────────────────────────────────────────────
@@ -906,6 +944,7 @@ export function App() {
         onLoad={handleLoadSession}
         onDelete={handleDeleteSession}
         onRename={handleRenameSession}
+        onCreateForPeriod={handleCreateSessionForPeriod}
       />
 
       {/* Main Body */}
