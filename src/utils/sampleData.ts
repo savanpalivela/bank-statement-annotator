@@ -122,7 +122,10 @@ export function parseRawDataToTransactions(
     }
 
     validTransactions.push({
-      id: `tx-${accountId}-${idx}-${Date.now()}`,
+      // Deterministic per account+row — MUST stay stable across re-parses so that
+      // category/exclude overrides (matched by id when accounts are added/removed
+      // or a mapping changes) keep applying to the same logical row.
+      id: `tx-${accountId}-${idx}`,
       originalRowIndex: idx,
       date: dateStr,
       description: descStr,

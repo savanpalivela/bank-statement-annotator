@@ -804,10 +804,9 @@ export function App() {
   // ── Export ────────────────────────────────────────────────────────────────
   const handleExport = () => {
     if (transactions.length === 0) return;
-    const exportName = `annotated_${fileName || 'bank_statement'}.xlsx`;
-    const primaryAccount = accounts[0];
-    const categoryCol = primaryAccount?.mapping.categoryCol || 'Category / Annotation';
-    exportTransactionsToExcel(transactions, primaryAccount?.columns || [], categoryCol, exportName);
+    const baseName = (fileName || 'bank_statement').replace(/\.(xlsx|xls)$/i, '');
+    const exportName = `annotated_${baseName}.xlsx`;
+    exportTransactionsToExcel(transactions, 'Category / Annotation', exportName);
     triggerNotification(`Exported: ${exportName}`);
   };
 

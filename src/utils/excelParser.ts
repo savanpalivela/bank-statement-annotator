@@ -213,19 +213,22 @@ export function detectColumnMapping(columns: string[]): ColumnMapping {
 
 export function exportTransactionsToExcel(
   transactions: Transaction[],
-  _originalColumns: string[],
   categoryColName: string = 'Category / Annotation',
   fileName: string = 'annotated_bank_statement.xlsx'
 ) {
-  const exportRows = transactions.map((tx) => {
-    const rowObj: Record<string, any> = {
-      Account: tx.accountLabel,
-      ...tx.rawRow,
-    };
-    rowObj[categoryColName] = tx.category || 'Uncategorized';
-    rowObj['Excluded (Internal Transfer)'] = tx.excluded ? 'TRUE' : '';
-    return rowObj;
-  });
+  // Built from each transaction's own normalized fields — not the original
+  // per-file rawRow — so every row lands under the SAME headers even when
+  // accounts came from files with differently-named Date/Amount/etc columns.
+  const exportRows = transactions.map((tx) => ({
+    Account: tx.accountLabel,
+    Date: tx.date,
+    Description: tx.description,
+    Debit: tx.debit,
+    Credit: tx.credit,
+    Balance: tx.runningBalance ?? '',
+    [categoryColName]: tx.category || 'Uncategorized',
+    'Excluded (Internal Transfer)': tx.excluded ? 'TRUE' : '',
+  }));
 
   const worksheet = XLSX.utils.json_to_sheet(exportRows);
   const workbook = XLSX.utils.book_new();
