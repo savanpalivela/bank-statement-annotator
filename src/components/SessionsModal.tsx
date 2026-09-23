@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { X, Save, FolderOpen, Trash2, Pencil, Check, Layers } from 'lucide-react';
+import { X, Save, Layers } from 'lucide-react';
 import type { SessionSummary } from '../utils/sessionStore';
-import { listSessions, timeAgo } from '../utils/sessionStore';
+import { listSessions } from '../utils/sessionStore';
+import { SessionTimeline } from './SessionTimeline';
 
 interface SessionsModalProps {
   isOpen: boolean;
@@ -31,14 +32,11 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
 }) => {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [name, setName] = useState('');
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
 
   useEffect(() => {
     if (isOpen) {
       setSessions(listSessions());
       setName(currentSessionName ?? suggestedName);
-      setEditingId(null);
     }
   }, [isOpen, currentSessionName, suggestedName]);
 
@@ -135,102 +133,24 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
             )}
           </div>
 
-          {/* Saved list */}
+          {/* Timeline of saved statement annotations, grouped by Month/Year */}
           <div className="space-y-2">
             <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-              Saved sessions ({sessions.length})
+              Timeline ({sessions.length})
             </label>
-            {sessions.length === 0 ? (
-              <p className="text-xs text-slate-500 italic px-1 py-3">No saved sessions yet.</p>
-            ) : (
-              sessions.map((s) => (
-                <div
-                  key={s.id}
-                  className={`rounded-xl border p-3 ${
-                    s.id === currentSessionId
-                      ? 'bg-indigo-950/40 border-indigo-500/50'
-                      : 'bg-slate-800/50 border-slate-700/60'
-                  }`}
-                >
-                  {editingId === s.id ? (
-                    <div className="flex items-center gap-2">
-                      <input
-                        autoFocus
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && editName.trim()) {
-                            onRename(s.id, editName.trim());
-                            setEditingId(null);
-                            setTimeout(refresh, 0);
-                          }
-                          if (e.key === 'Escape') setEditingId(null);
-                        }}
-                        className="flex-1 bg-slate-900 border border-indigo-500 text-slate-100 rounded-lg px-2 py-1 text-xs focus:outline-none"
-                      />
-                      <button
-                        onClick={() => {
-                          if (editName.trim()) {
-                            onRename(s.id, editName.trim());
-                            setEditingId(null);
-                            setTimeout(refresh, 0);
-                          }
-                        }}
-                        className="p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-slate-100 truncate">{s.name}</span>
-                          {s.id === currentSessionId && (
-                            <span className="text-[9px] uppercase tracking-wider text-indigo-300 bg-indigo-500/20 px-1.5 py-0.5 rounded-full shrink-0">
-                              current
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-400 mt-0.5">
-                          {s.accountCount} account{s.accountCount === 1 ? '' : 's'} · {s.txCount} transactions ·{' '}
-                          {s.annotatedCount} tagged · saved {timeAgo(s.savedAt)}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          onClick={() => onLoad(s.id)}
-                          title="Load this session"
-                          className="p-1.5 text-slate-400 hover:text-indigo-300 rounded-md transition-colors"
-                        >
-                          <FolderOpen className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setEditingId(s.id);
-                            setEditName(s.name);
-                          }}
-                          title="Rename"
-                          className="p-1.5 text-slate-400 hover:text-indigo-300 rounded-md transition-colors"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            onDelete(s.id);
-                            setTimeout(refresh, 0);
-                          }}
-                          title="Delete"
-                          className="p-1.5 text-slate-400 hover:text-rose-400 rounded-md transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
+            <SessionTimeline
+              sessions={sessions}
+              currentSessionId={currentSessionId}
+              onLoad={onLoad}
+              onRename={(id, newName) => {
+                onRename(id, newName);
+                setTimeout(refresh, 0);
+              }}
+              onDelete={(id) => {
+                onDelete(id);
+                setTimeout(refresh, 0);
+              }}
+            />
           </div>
         </div>
 

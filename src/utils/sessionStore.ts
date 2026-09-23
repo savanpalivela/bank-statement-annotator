@@ -16,11 +16,59 @@ export interface SavedSession {
   accountCount: number;
   txCount: number;
   annotatedCount: number;
+  /** Human label for the statement period this session covers, e.g. "July 2026" or "Jun – Jul 2026" */
+  periodLabel: string;
+  /** Sortable "YYYY-MM" key for the period's start month — groups/orders the timeline */
+  periodSortKey: string;
   data: SessionData;
 }
 
 /** Lightweight row shown in the sessions list (without the heavy `data` payload). */
 export type SessionSummary = Omit<SavedSession, 'data'>;
+
+export interface SessionPeriod {
+  label: string;
+  sortKey: string;
+}
+
+/**
+ * Derive the statement period a session covers from its transactions' own
+ * dates — not the free-text session name — so the timeline groups sessions
+ * correctly even if they weren't named "Month Year".
+ */
+export function computeSessionPeriod(transactions: { date: string }[]): SessionPeriod {
+  let min: Date | null = null;
+  let max: Date | null = null;
+  for (const tx of transactions) {
+    const d = new Date(tx.date);
+    if (isNaN(d.getTime())) continue;
+    if (!min || d < min) min = d;
+    if (!max || d > max) max = d;
+  }
+  if (!min || !max) return { label: 'Undated', sortKey: '0000-00' };
+
+  const sortKey = `${min.getFullYear()}-${String(min.getMonth() + 1).padStart(2, '0')}`;
+  const fullMonthYear = (d: Date) => d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  const shortMonth = (d: Date) => d.toLocaleString('en-US', { month: 'short' });
+
+  const sameMonth = min.getFullYear() === max.getFullYear() && min.getMonth() === max.getMonth();
+  if (sameMonth) return { label: fullMonthYear(min), sortKey };
+
+  const sameYear = min.getFullYear() === max.getFullYear();
+  const label = sameYear
+    ? `${shortMonth(min)} – ${shortMonth(max)} ${min.getFullYear()}`
+    : `${shortMonth(min)} ${min.getFullYear()} – ${shortMonth(max)} ${max.getFullYear()}`;
+  return { label, sortKey };
+}
+
+/** Fallback period for sessions saved before periodLabel/periodSortKey existed. */
+function periodFromSavedAt(savedAt: number): SessionPeriod {
+  const d = new Date(savedAt);
+  return {
+    label: `${d.toLocaleString('en-US', { month: 'long', year: 'numeric' })} (saved)`,
+    sortKey: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+  };
+}
 
 function readAll(): SavedSession[] {
   try {
@@ -39,7 +87,12 @@ function writeAll(sessions: SavedSession[]): void {
 
 export function listSessions(): SessionSummary[] {
   return readAll()
-    .map(({ data: _data, ...summary }) => summary)
+    .map(({ data: _data, ...summary }) => {
+      if (summary.periodLabel && summary.periodSortKey) return summary;
+      // Session saved before periodLabel/periodSortKey existed — backfill from savedAt.
+      const fallback = periodFromSavedAt(summary.savedAt);
+      return { ...summary, periodLabel: summary.periodLabel || fallback.label, periodSortKey: summary.periodSortKey || fallback.sortKey };
+    })
     .sort((a, b) => b.savedAt - a.savedAt);
 }
 

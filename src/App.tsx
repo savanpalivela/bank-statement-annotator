@@ -24,7 +24,7 @@ import { exportRulesToFile, parseImportedRules } from './utils/rulesIO';
 import { exportCategoriesToFile, parseImportedCategories } from './utils/categoriesIO';
 import { SessionsModal } from './components/SessionsModal';
 import { AccountsBar } from './components/AccountsBar';
-import { getSession, upsertSession, deleteSession, renameSession } from './utils/sessionStore';
+import { getSession, upsertSession, deleteSession, renameSession, computeSessionPeriod } from './utils/sessionStore';
 import { getAllNotes, putNote, bulkPutNotes, noteKey } from './utils/notesStore';
 import type { SavedSession, SessionData } from './utils/sessionStore';
 import { CheckCircle, AlertCircle, Files, AlertTriangle, PlusCircle, X, Layers, LayoutDashboard, Table2 } from 'lucide-react';
@@ -337,6 +337,7 @@ export function App() {
   const handleSaveSession = (name: string, mode: 'update' | 'new') => {
     const id = mode === 'update' && currentSessionId ? currentSessionId : `sess-${Date.now()}`;
     const data: SessionData = { accounts, transactions, isUsingSample, rejectedFilesList };
+    const period = computeSessionPeriod(transactions);
     const session: SavedSession = {
       id,
       name,
@@ -344,6 +345,8 @@ export function App() {
       accountCount: accounts.length,
       txCount: transactions.length,
       annotatedCount: summaryData.annotatedCount,
+      periodLabel: period.label,
+      periodSortKey: period.sortKey,
       data,
     };
     try {
