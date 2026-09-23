@@ -1,15 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { X, Save, Layers } from 'lucide-react';
 import type { SessionSummary } from '../utils/sessionStore';
-import { listSessions } from '../utils/sessionStore';
 import { SessionTimeline } from './SessionTimeline';
-import { MonthYearNavigator } from './MonthYearNavigator';
 
 interface SessionsModalProps {
   isOpen: boolean;
   onClose: () => void;
   /** true when there is data worth saving */
   hasData: boolean;
+  sessions: SessionSummary[];
   currentSessionId: string | null;
   currentSessionName: string | null;
   suggestedName: string;
@@ -17,13 +16,13 @@ interface SessionsModalProps {
   onLoad: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, name: string) => void;
-  onCreateForPeriod: (year: number, month: number) => void;
 }
 
 export const SessionsModal: React.FC<SessionsModalProps> = ({
   isOpen,
   onClose,
   hasData,
+  sessions,
   currentSessionId,
   currentSessionName,
   suggestedName,
@@ -31,14 +30,11 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
   onLoad,
   onDelete,
   onRename,
-  onCreateForPeriod,
 }) => {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [name, setName] = useState('');
 
   useEffect(() => {
     if (isOpen) {
-      setSessions(listSessions());
       setName(currentSessionName ?? suggestedName);
     }
   }, [isOpen, currentSessionName, suggestedName]);
@@ -52,13 +48,11 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
 
   if (!isOpen) return null;
 
-  const refresh = () => setSessions(listSessions());
   const trimmed = name.trim();
 
   const handleSave = (mode: 'update' | 'new') => {
     if (!trimmed) return;
     onSave(trimmed, mode);
-    setTimeout(refresh, 0);
   };
 
   return (
@@ -136,17 +130,6 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
             )}
           </div>
 
-          {/* Jump to any Month/Year — including ones with no session yet — and start one */}
-          <MonthYearNavigator
-            sessions={sessions}
-            onLoad={(id) => {
-              onLoad(id);
-            }}
-            onCreateSession={(year, month) => {
-              onCreateForPeriod(year, month);
-            }}
-          />
-
           {/* Timeline of saved statement annotations, grouped by Month/Year */}
           <div className="space-y-2">
             <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
@@ -156,14 +139,8 @@ export const SessionsModal: React.FC<SessionsModalProps> = ({
               sessions={sessions}
               currentSessionId={currentSessionId}
               onLoad={onLoad}
-              onRename={(id, newName) => {
-                onRename(id, newName);
-                setTimeout(refresh, 0);
-              }}
-              onDelete={(id) => {
-                onDelete(id);
-                setTimeout(refresh, 0);
-              }}
+              onRename={onRename}
+              onDelete={onDelete}
             />
           </div>
         </div>

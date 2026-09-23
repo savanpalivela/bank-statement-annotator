@@ -1,10 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, FolderOpen, PlusCircle } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { CalendarDays, ChevronLeft, ChevronRight, PlusCircle } from 'lucide-react';
 import type { SessionSummary } from '../utils/sessionStore';
 
-interface MonthYearNavigatorProps {
+interface MonthYearSwitcherProps {
   sessions: SessionSummary[];
-  onLoad: (id: string) => void;
+  currentSessionId: string | null;
+  /**
+   * Called whenever the selected month/year changes (arrows or picker) — the caller auto-loads
+   * a matching session. Returns false when a matching session existed but the load was declined
+   * (e.g. an unsaved-data confirm was cancelled); the switcher then reverts to the prior month.
+   */
+  onSwitchMonth: (year: number, month: number) => boolean;
   onCreateSession: (year: number, month: number) => void;
 }
 
@@ -19,12 +25,15 @@ function sortKeyFor(year: number, month: number): string {
 }
 
 /**
- * Lets the user step or jump to any month/year — not just ones that already
- * have a saved session — and create a blank, period-tagged session for it.
+ * Home-page Month/Year switcher. Lives outside the Sessions modal so it's always
+ * visible — stepping or jump-picking a month auto-loads the most recent session
+ * saved for it (see handleSwitchMonth in App.tsx), rather than requiring an
+ * explicit "Load" click.
  */
-export const MonthYearNavigator: React.FC<MonthYearNavigatorProps> = ({
+export const MonthYearSwitcher: React.FC<MonthYearSwitcherProps> = ({
   sessions,
-  onLoad,
+  currentSessionId,
+  onSwitchMonth,
   onCreateSession,
 }) => {
   const today = new Date();
@@ -32,6 +41,18 @@ export const MonthYearNavigator: React.FC<MonthYearNavigatorProps> = ({
   const [month, setMonth] = useState(today.getMonth());
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+
+  // Stay in sync when a session gets loaded some other way (e.g. from the Timeline in the Sessions modal).
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const s = sessions.find((x) => x.id === currentSessionId);
+    if (!s?.periodSortKey || s.periodSortKey === '0000-00') return;
+    const [y, m] = s.periodSortKey.split('-').map(Number);
+    setYear(y);
+    setMonth(m - 1);
+    // Only react to the loaded session actually changing — not to every sessions-list refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSessionId]);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -42,39 +63,35 @@ export const MonthYearNavigator: React.FC<MonthYearNavigatorProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, [pickerOpen]);
 
+  const trySwitch = (y: number, m: number) => {
+    const prevYear = year;
+    const prevMonth = month;
+    setYear(y);
+    setMonth(m);
+    if (!onSwitchMonth(y, m)) {
+      // Load was declined — snap the picker back to what's actually on screen.
+      setYear(prevYear);
+      setMonth(prevMonth);
+    }
+  };
+
   const goToMonth = (deltaMonths: number) => {
     const d = new Date(year, month + deltaMonths, 1);
-    setYear(d.getFullYear());
-    setMonth(d.getMonth());
+    trySwitch(d.getFullYear(), d.getMonth());
   };
 
-  const jumpToToday = () => {
-    setYear(today.getFullYear());
-    setMonth(today.getMonth());
+  const pickMonth = (y: number, m: number) => {
+    setPickerOpen(false);
+    trySwitch(y, m);
   };
 
-  const matches = useMemo(
-    () => sessions.filter((s) => s.periodSortKey === sortKeyFor(year, month)),
-    [sessions, year, month]
-  );
-
+  const matches = sessions.filter((s) => s.periodSortKey === sortKeyFor(year, month));
   const label = `${MONTH_NAMES[month]} ${year}`;
-  const isCurrentCalendarMonth = year === today.getFullYear() && month === today.getMonth();
+  const isLoadedHere = matches.some((s) => s.id === currentSessionId);
 
   return (
-    <div className="bg-slate-800/60 border border-slate-700/60 rounded-xl p-3.5 space-y-3">
-      <div className="flex items-center justify-between">
-        <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-          Navigate to a month
-        </label>
-        {!isCurrentCalendarMonth && (
-          <button onClick={jumpToToday} className="text-[11px] text-indigo-400 hover:text-indigo-300 underline">
-            Jump to current month
-          </button>
-        )}
-      </div>
-
-      <div className="flex items-center justify-center gap-2">
+    <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center gap-2">
         <button
           onClick={() => goToMonth(-1)}
           title="Previous month"
@@ -93,7 +110,7 @@ export const MonthYearNavigator: React.FC<MonthYearNavigatorProps> = ({
           </button>
 
           {pickerOpen && (
-            <div className="absolute z-20 top-full mt-2 left-1/2 -translate-x-1/2 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-3 w-56">
+            <div className="absolute z-20 top-full mt-2 left-0 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-3 w-56">
               <div className="flex items-center justify-between mb-2">
                 <button
                   onClick={() => setYear((y) => y - 1)}
@@ -113,10 +130,7 @@ export const MonthYearNavigator: React.FC<MonthYearNavigatorProps> = ({
                 {MONTH_SHORT.map((m, idx) => (
                   <button
                     key={m}
-                    onClick={() => {
-                      setMonth(idx);
-                      setPickerOpen(false);
-                    }}
+                    onClick={() => pickMonth(year, idx)}
                     className={`py-1.5 rounded-md text-[11px] font-semibold transition-colors ${
                       idx === month
                         ? 'bg-indigo-600 text-white'
@@ -140,35 +154,26 @@ export const MonthYearNavigator: React.FC<MonthYearNavigatorProps> = ({
         </button>
       </div>
 
-      {matches.length > 0 ? (
-        <div className="space-y-1.5">
-          {matches.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => onLoad(s.id)}
-              className="w-full flex items-center justify-between gap-2 bg-slate-900/70 hover:bg-slate-900 border border-slate-700/60 rounded-lg px-3 py-2 text-left transition-colors"
-            >
-              <div className="min-w-0">
-                <div className="text-xs font-semibold text-slate-100 truncate">{s.name}</div>
-                <div className="text-[10px] text-slate-500">
-                  {s.accountCount} account{s.accountCount === 1 ? '' : 's'} · {s.txCount} transactions
-                </div>
-              </div>
-              <FolderOpen className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-slate-500 italic">No sessions saved for {label} yet.</p>
-      )}
+      <div className="text-xs">
+        {matches.length > 0 ? (
+          <span className="text-slate-400">
+            {matches.length} session{matches.length === 1 ? '' : 's'} for {label}
+            {isLoadedHere && <span className="ml-1.5 text-emerald-400 font-semibold">— loaded</span>}
+          </span>
+        ) : (
+          <span className="text-slate-500 italic">No session for {label}</span>
+        )}
+      </div>
 
-      <button
-        onClick={() => onCreateSession(year, month)}
-        className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
-      >
-        <PlusCircle className="w-3.5 h-3.5" />
-        Create session for {label}
-      </button>
+      {matches.length === 0 && (
+        <button
+          onClick={() => onCreateSession(year, month)}
+          className="text-xs bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-xl font-medium flex items-center gap-1.5 transition-colors"
+        >
+          <PlusCircle className="w-3.5 h-3.5" />
+          Create session for {label}
+        </button>
+      )}
     </div>
   );
 };

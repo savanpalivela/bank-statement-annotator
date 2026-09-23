@@ -24,9 +24,10 @@ import { exportRulesToFile, parseImportedRules } from './utils/rulesIO';
 import { exportCategoriesToFile, parseImportedCategories } from './utils/categoriesIO';
 import { SessionsModal } from './components/SessionsModal';
 import { AccountsBar } from './components/AccountsBar';
-import { getSession, upsertSession, deleteSession, renameSession, computeSessionPeriod, periodForMonth } from './utils/sessionStore';
+import { getSession, upsertSession, deleteSession, renameSession, computeSessionPeriod, periodForMonth, listSessions } from './utils/sessionStore';
 import { getAllNotes, putNote, bulkPutNotes, noteKey } from './utils/notesStore';
-import type { SavedSession, SessionData } from './utils/sessionStore';
+import type { SavedSession, SessionData, SessionSummary } from './utils/sessionStore';
+import { MonthYearSwitcher } from './components/MonthYearSwitcher';
 import { CheckCircle, AlertCircle, Files, AlertTriangle, PlusCircle, X, Layers, LayoutDashboard, Table2 } from 'lucide-react';
 
 const LOCAL_STORAGE_RULES_KEY = 'bank_annotator_smart_rules_v1';
@@ -85,6 +86,8 @@ export function App() {
   // ── Named session tracking ────────────────────────────────────────────────
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentSessionName, setCurrentSessionName] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[]>(() => listSessions());
+  const refreshSessions = () => setSessions(listSessions());
 
   // ── Rules ─────────────────────────────────────────────────────────────────
   const [rules, setRules] = useState<Rule[]>(() => {
@@ -351,6 +354,7 @@ export function App() {
     };
     try {
       upsertSession(session);
+      refreshSessions();
       setCurrentSessionId(id);
       setCurrentSessionName(name);
       triggerNotification(mode === 'update' ? `Session "${name}" updated.` : `Session "${name}" saved.`);
@@ -359,18 +363,19 @@ export function App() {
     }
   };
 
-  const handleLoadSession = (id: string) => {
+  /** Returns false when the load didn't happen (session missing, or the user declined to replace unsaved data). */
+  const handleLoadSession = (id: string): boolean => {
     const session = getSession(id);
     if (!session) {
       triggerNotification('That session could not be found.', 'info');
-      return;
+      return false;
     }
     if (
       transactions.length > 0 &&
       id !== currentSessionId &&
       !window.confirm(`Load "${session.name}"? This replaces the statements currently open.`)
     ) {
-      return;
+      return false;
     }
     const { accounts: a, transactions: t, isUsingSample: s, rejectedFilesList: r } = session.data;
     // Re-seed IndexedDB with any notes this session carries, so they persist
@@ -390,10 +395,12 @@ export function App() {
     setCurrentSessionName(session.name);
     setIsSessionsOpen(false);
     triggerNotification(`Loaded session "${session.name}" (${t.length} transactions).`);
+    return true;
   };
 
   const handleDeleteSession = (id: string) => {
     deleteSession(id);
+    refreshSessions();
     if (id === currentSessionId) {
       setCurrentSessionId(null);
       setCurrentSessionName(null);
@@ -403,6 +410,7 @@ export function App() {
 
   const handleRenameSession = (id: string, name: string) => {
     renameSession(id, name);
+    refreshSessions();
     if (id === currentSessionId) setCurrentSessionName(name);
   };
 
@@ -433,6 +441,7 @@ export function App() {
       triggerNotification('Could not create session — browser storage is full. Delete an old session and retry.', 'info');
       return;
     }
+    refreshSessions();
     rawDataMapRef.current.clear();
     setAccounts([]);
     setTransactions([]);
@@ -442,6 +451,19 @@ export function App() {
     setCurrentSessionName(period.label);
     setIsSessionsOpen(false);
     triggerNotification(`Created session "${period.label}". Upload statements to fill it in.`);
+  };
+
+  /**
+   * Switching the home-page Month/Year picker auto-loads the most recent session for that
+   * month, if any. Returns false only when a session existed there but the load was declined
+   * (unsaved data + cancelled confirm) — the switcher then reverts to the actually-loaded month
+   * instead of showing a month that doesn't match what's on screen.
+   */
+  const handleSwitchMonth = (year: number, month: number): boolean => {
+    const sortKey = periodForMonth(year, month).sortKey;
+    const match = sessions.find((s) => s.periodSortKey === sortKey);
+    if (!match || match.id === currentSessionId) return true;
+    return handleLoadSession(match.id);
   };
 
   // ── Demo Sample ───────────────────────────────────────────────────────────
@@ -936,6 +958,7 @@ export function App() {
         isOpen={isSessionsOpen}
         onClose={() => setIsSessionsOpen(false)}
         hasData={transactions.length > 0}
+        sessions={sessions}
         currentSessionId={currentSessionId}
         currentSessionName={currentSessionName}
         suggestedName={suggestedSessionName}
@@ -943,11 +966,18 @@ export function App() {
         onLoad={handleLoadSession}
         onDelete={handleDeleteSession}
         onRename={handleRenameSession}
-        onCreateForPeriod={handleCreateSessionForPeriod}
       />
 
       {/* Main Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 md:p-8 space-y-6">
+        {/* Home-page Month/Year switcher — always visible; switching auto-loads that month's session */}
+        <MonthYearSwitcher
+          sessions={sessions}
+          currentSessionId={currentSessionId}
+          onSwitchMonth={handleSwitchMonth}
+          onCreateSession={handleCreateSessionForPeriod}
+        />
+
         {transactions.length === 0 ? (
           <div className="max-w-2xl mx-auto py-12 space-y-4">
             <FileUploader
